@@ -86,10 +86,36 @@ const histStats           = $('histStats');
 const histTbody           = $('histTbody');
 const btnFecharHistorico  = $('btnFecharHistorico');
 
+const gastoMes            = $('gastoMes');
+const rendaMensal         = $('rendaMensal');
+const btnSalvarRenda      = $('btnSalvarRenda');
+const rendaHerdadaAviso   = $('rendaHerdadaAviso');
+const metaNecessidade     = $('metaNecessidade');
+const metaLazer           = $('metaLazer');
+const metaReserva         = $('metaReserva');
+const barraNecessidade    = $('barraNecessidade');
+const barraLazer          = $('barraLazer');
+const barraReserva        = $('barraReserva');
+const gastoNecessidadeTexto = $('gastoNecessidadeTexto');
+const gastoLazerTexto       = $('gastoLazerTexto');
+const gastoReservaTexto     = $('gastoReservaTexto');
+const formGasto           = $('formGasto');
+const gastoId             = $('gastoId');
+const gastoDescricao      = $('gastoDescricao');
+const gastoCategoria      = $('gastoCategoria');
+const gastoValor          = $('gastoValor');
+const gastoData           = $('gastoData');
+const gastoObservacao     = $('gastoObservacao');
+const btnCancelarGasto    = $('btnCancelarGasto');
+const tituloFormGasto     = $('tituloFormGasto');
+const gastoFiltroCategoria = $('gastoFiltroCategoria');
+const tbodyGastos         = $('tbodyGastos');
+
 // ─── Estado ───────────────────────────────────────────────────────────────────
 
 let pagamentos       = [];
 let clientes         = [];
+let gastos           = [];
 let modoCadastro     = false;
 let _resolveDataPago = null;
 let extratoNomePessoa = null;
@@ -142,6 +168,21 @@ function popularMesResumo() {
     mesResumo.appendChild(opt);
     d.setMonth(d.getMonth() - 1);
   }
+}
+
+function popularGastoMes() {
+  if (gastoMes.options.length) return;
+  gastoMes.innerHTML = '';
+  const d = new Date();
+  for (let i = 0; i < 13; i++) {
+    const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = formatarMesLabel(val);
+    gastoMes.appendChild(opt);
+    d.setMonth(d.getMonth() - 1);
+  }
+  gastoMes.value = mesAtual();
 }
 
 function calcularVencimento(d) {
@@ -237,6 +278,7 @@ function mostrarApp() {
     appArea.classList.remove('hidden');
     usuarioLogado.textContent = `👋 Olá, ${u.nome || u.email}! · ${u.email}`;
     popularMesResumo();
+    popularGastoMes();
     carregarTudo();
   } else {
     authArea.classList.remove('hidden');
@@ -613,7 +655,11 @@ function esconderLoading() {
 async function carregarTudo() {
   mostrarLoading();
   try {
-    await Promise.all([carregarResumo(), carregarPagamentos(), carregarGraficos(), carregarNomes(), carregarLucroMes(), carregarClientes()]);
+    await Promise.all([
+      carregarResumo(), carregarPagamentos(), carregarGraficos(), carregarNomes(),
+      carregarLucroMes(), carregarClientes(), carregarPagos(),
+      carregarGastosResumo(), carregarListaGastos()
+    ]);
   } finally { esconderLoading(); }
 }
 
@@ -964,6 +1010,218 @@ function abrirModalHistorico(cliente, stats, historico) {
 }
 
 btnFecharHistorico.addEventListener('click', () => modalHistorico.classList.add('hidden'));
+
+// ─── Gastos pessoais (regra 50/30/20) ──────────────────────────────────────────
+
+const CATEGORIA_GASTO_LABEL = {
+  NECESSIDADE: '🏠 Necessidade',
+  LAZER:       '🎉 Lazer',
+  RESERVA:     '🐷 Reserva/Investir'
+};
+
+async function carregarGastosResumo() {
+  const mes = gastoMes.value || mesAtual();
+  const [resRenda, resResumo] = await Promise.all([
+    fetch(`${API_BASE}/gastos/renda?mes=${mes}`, { headers: headers() }),
+    fetch(`${API_BASE}/gastos/resumo?mes=${mes}`, { headers: headers() })
+  ]);
+  if (resRenda.ok) {
+    const r = await resRenda.json();
+    rendaMensal.value = r.renda > 0 ? String(r.renda.toFixed(2)).replace('.', ',') : '';
+    rendaHerdadaAviso.classList.toggle('hidden', r.definida_neste_mes || r.renda === 0);
+  }
+  if (resResumo.ok) {
+    const resumo = await resResumo.json();
+    renderizarCardsGastos(resumo);
+  }
+}
+
+function renderizarCardsGastos(resumo) {
+  const porCategoria = {};
+  resumo.categorias.forEach(c => { porCategoria[c.categoria] = c; });
+
+  const preencher = (cat, elMeta, elBarra, elTexto) => {
+    const c = porCategoria[cat];
+    if (!c) return;
+    elMeta.textContent = moeda(c.meta);
+    const pct = c.meta > 0 ? Math.min(100, (c.gasto / c.meta) * 100) : (c.gasto > 0 ? 100 : 0);
+    elBarra.style.width = `${pct}%`;
+    elBarra.classList.toggle('excedido', c.excedido);
+    elTexto.textContent = c.excedido
+      ? `⚠️ ${moeda(c.gasto)} gasto — excedeu em ${moeda(Math.abs(c.saldo))}`
+      : `${moeda(c.gasto)} gasto de ${moeda(c.meta)} (sobram ${moeda(c.saldo)})`;
+  };
+
+  preencher('NECESSIDADE', metaNecessidade, barraNecessidade, gastoNecessidadeTexto);
+  preencher('LAZER',       metaLazer,       barraLazer,       gastoLazerTexto);
+  preencher('RESERVA',     metaReserva,     barraReserva,     gastoReservaTexto);
+}
+
+async function carregarListaGastos() {
+  const mes = gastoMes.value || mesAtual();
+  const p = new URLSearchParams({ mes });
+  if (gastoFiltroCategoria.value && gastoFiltroCategoria.value !== 'TODAS') p.append('categoria', gastoFiltroCategoria.value);
+  const res = await fetch(`${API_BASE}/gastos?${p}`, { headers: headers() });
+  if (!res.ok) return;
+  gastos = await res.json();
+  renderizarListaGastos();
+}
+
+function renderizarListaGastos() {
+  tbodyGastos.innerHTML = '';
+  if (!gastos.length) {
+    tbodyGastos.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#667085;padding:24px">Nenhum gasto registrado neste mês</td></tr>';
+    return;
+  }
+  gastos.forEach(g => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td data-label="Descrição">${g.descricao}${g.observacao ? `<br><small style="color:#667085">${g.observacao}</small>` : ''}</td>
+      <td data-label="Categoria">${CATEGORIA_GASTO_LABEL[g.categoria] || g.categoria}</td>
+      <td data-label="Data">${dataBR(g.data)}</td>
+      <td data-label="Valor"><strong>${moeda(g.valor)}</strong></td>
+      <td data-label="Ações" style="white-space:nowrap;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn secundario" type="button" onclick="window.editarGasto(${g.id})">Editar</button>
+        <button class="btn perigo" type="button" onclick="window.removerGasto(${g.id})">🗑️</button>
+      </td>
+    `;
+    tbodyGastos.appendChild(tr);
+  });
+}
+
+function limparFormGasto() {
+  formGasto.reset();
+  gastoId.value = '';
+  gastoData.value = hojeISO();
+  tituloFormGasto.textContent = '➕ Novo gasto';
+}
+limparFormGasto();
+
+window.editarGasto = function (id) {
+  const g = gastos.find(x => Number(x.id) === Number(id));
+  if (!g) { toast('Gasto não encontrado'); return; }
+  gastoId.value          = g.id;
+  gastoDescricao.value   = g.descricao;
+  gastoCategoria.value   = g.categoria;
+  gastoValor.value       = String(Number(g.valor).toFixed(2)).replace('.', ',');
+  gastoData.value        = g.data;
+  gastoObservacao.value  = g.observacao || '';
+  tituloFormGasto.textContent = '✏️ Editar gasto';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
+window.removerGasto = async function (id) {
+  if (!confirm('Remover este gasto?')) return;
+  const res  = await fetch(`${API_BASE}/gastos/${id}`, { method: 'DELETE', headers: headers() });
+  const data = await res.json();
+  if (!res.ok) { toast(data.erro || 'Erro ao remover gasto'); return; }
+  await Promise.all([carregarListaGastos(), carregarGastosResumo()]);
+  toast(data.mensagem || 'Gasto removido');
+};
+
+formGasto.addEventListener('submit', async e => {
+  e.preventDefault();
+  const id = gastoId.value;
+  const payload = {
+    descricao:  gastoDescricao.value,
+    categoria:  gastoCategoria.value,
+    valor:      toValorNumero(gastoValor.value),
+    data:       gastoData.value,
+    observacao: gastoObservacao.value
+  };
+  const res  = await fetch(id ? `${API_BASE}/gastos/${id}` : `${API_BASE}/gastos`, {
+    method: id ? 'PUT' : 'POST', headers: headers(true), body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) { toast(data.erro || 'Erro ao salvar gasto'); return; }
+  limparFormGasto();
+  await Promise.all([carregarListaGastos(), carregarGastosResumo()]);
+  toast(data.mensagem || 'Gasto salvo com sucesso');
+});
+
+btnCancelarGasto.addEventListener('click', limparFormGasto);
+
+btnSalvarRenda.addEventListener('click', async () => {
+  const mes = gastoMes.value || mesAtual();
+  const res  = await fetch(`${API_BASE}/gastos/renda`, {
+    method: 'PUT', headers: headers(true),
+    body: JSON.stringify({ mes, valor: toValorNumero(rendaMensal.value || '0') })
+  });
+  const data = await res.json();
+  if (!res.ok) { toast(data.erro || 'Erro ao salvar renda'); return; }
+  await carregarGastosResumo();
+  toast(data.mensagem || 'Renda salva com sucesso');
+});
+
+gastoMes.addEventListener('change', () => {
+  carregarGastosResumo();
+  carregarListaGastos();
+});
+gastoFiltroCategoria.addEventListener('change', carregarListaGastos);
+
+// ─── Empréstimos pagos, agrupados por mês ──────────────────────────────────────
+
+let pagamentosPagos = [];
+
+async function carregarPagos() {
+  const res = await fetch(`${API_BASE}/pagamentos?status=PAGO`, { headers: headers() });
+  if (!res.ok) return;
+  pagamentosPagos = await res.json();
+  renderizarPagos();
+}
+
+function renderizarPagos() {
+  const wrap = $('listaPagos');
+  wrap.innerHTML = '';
+  if (!pagamentosPagos.length) {
+    wrap.innerHTML = '<p style="text-align:center;color:#667085;padding:24px">Nenhum empréstimo pago ainda</p>';
+    return;
+  }
+
+  const grupos = {};
+  pagamentosPagos.forEach(p => {
+    const mes = p.data_pago ? p.data_pago.slice(0, 7) : 'sem-data';
+    (grupos[mes] = grupos[mes] || []).push(p);
+  });
+
+  Object.keys(grupos).sort((a, b) => b.localeCompare(a)).forEach(mes => {
+    const itens = grupos[mes];
+    const totalMes = itens.reduce((s, p) => s + Number(p.valor_total), 0);
+    const labelMes = mes === 'sem-data' ? 'Sem data de pagamento' : formatarMesLabel(mes);
+
+    const painel = document.createElement('div');
+    painel.className = 'painel painel-mes-pago';
+    painel.innerHTML = `
+      <div class="mes-pago-cabecalho">
+        <h3>${labelMes}</h3>
+        <span class="mes-pago-total">${itens.length} pagamento(s) · ${moeda(totalMes)}</span>
+      </div>
+      <div class="tabela-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Nome</th><th>Pegou</th><th>Vencimento</th><th>Valor</th><th>Juros</th><th>Total</th><th>Pago em</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itens.map(p => `
+              <tr>
+                <td data-label="Nome">${p.nome}</td>
+                <td data-label="Pegou">${dataBR(p.data_pagamento)}</td>
+                <td data-label="Vencimento">${dataBR(p.data_vencimento)}</td>
+                <td data-label="Valor">${moeda(p.valor)}</td>
+                <td data-label="Juros">${moeda(p.juros)}</td>
+                <td data-label="Total"><strong>${moeda(p.valor_total)}</strong></td>
+                <td data-label="Pago em">${dataBR(p.data_pago)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    wrap.appendChild(painel);
+  });
+}
 
 // ─── Event listeners ──────────────────────────────────────────────────────────
 

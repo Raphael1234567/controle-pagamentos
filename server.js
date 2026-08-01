@@ -1171,6 +1171,198 @@ app.post('/api/extratos/pessoa/:nome/email', autenticar, async (req, res) => {
   }
 });
 
+// ─── Rotas: gastos pessoais (regra 50/30/20) ──────────────────────────────────
+// Aba separada do controle de empréstimos. O orçamento é definido pelo que
+// entra no mês (renda_mensal), não pelo saldo disponível em conta.
+
+const PERCENTUAL_META = { NECESSIDADE: 0.50, LAZER: 0.30, RESERVA: 0.20 };
+const CATEGORIAS_GASTO = Object.keys(PERCENTUAL_META);
+
+async function obterRendaMes(usuarioId, mes) {
+  const { rows } = await pool.query(`
+    SELECT valor FROM public.renda_mensal
+    WHERE usuario_id=$1 AND mes <= $2::date
+    ORDER BY mes DESC
+    LIMIT 1
+  `, [usuarioId, `${mes}-01`]);
+  return rows.length ? Number(rows[0].valor) : 0;
+}
+
+const CATEGORIA_GASTO_LABEL = { NECESSIDADE: 'Necessidades (50%)', LAZER: 'Lazer (30%)', RESERVA: 'Reserva/Investir (20%)' };
+
+async function enviarEmailResumoGasto(usuarioId, mes, gastoSalvo) {
+  if (!process.env.EMAIL_DESTINO || !process.env.SMTP_USER || !process.env.SMTP_PASS) return;
+  try {
+    const renda = await obterRendaMes(usuarioId, mes);
+    const { rows } = await pool.query(`
+      SELECT categoria, COALESCE(SUM(valor),0) AS total
+      FROM public.gastos
+      WHERE usuario_id=$1 AND cancelado_em IS NULL
+        AND data >= $2::date AND data < ($2::date + INTERVAL '1 month')
+      GROUP BY categoria
+    `, [usuarioId, `${mes}-01`]);
+
+    const gastoPorCategoria = { NECESSIDADE: 0, LAZER: 0, RESERVA: 0 };
+    rows.forEach(r => { gastoPorCategoria[r.categoria] = Number(r.total); });
+
+    const linhas = CATEGORIAS_GASTO.map(cat => {
+      const meta  = renda * PERCENTUAL_META[cat];
+      const gasto = gastoPorCategoria[cat];
+      const saldo = meta - gasto;
+      const situacao = saldo >= 0
+        ? `ainda pode gastar R$ ${saldo.toFixed(2)}`
+        : `excedeu a meta em R$ ${Math.abs(saldo).toFixed(2)}`;
+      return `${CATEGORIA_GASTO_LABEL[cat]}: R$ ${gasto.toFixed(2)} de R$ ${meta.toFixed(2)} — ${situacao}`;
+    });
+
+    const totalGasto      = Object.values(gastoPorCategoria).reduce((s, v) => s + v, 0);
+    const totalDisponivel = renda - totalGasto;
+
+    const mensagem =
+      `Gasto registrado: ${gastoSalvo.descricao} — R$ ${gastoSalvo.valor.toFixed(2)} (${CATEGORIA_GASTO_LABEL[gastoSalvo.categoria]})\n\n` +
+      `Resumo do mês (renda de R$ ${renda.toFixed(2)}):\n${linhas.join('\n')}\n\n` +
+      `Total disponível no mês: R$ ${totalDisponivel.toFixed(2)}`;
+
+    await enviarEmail(`Gasto registrado — ainda pode gastar R$ ${totalDisponivel.toFixed(2)} este mês`, mensagem);
+  } catch (err) { console.error('[gastos] Erro ao enviar email de resumo:', err); }
+}
+
+app.get('/api/gastos/renda', autenticar, async (req, res) => {
+  try {
+    const mes = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : mesAtualISO();
+    const { rows: exato } = await pool.query(
+      'SELECT valor FROM public.renda_mensal WHERE usuario_id=$1 AND mes=$2::date',
+      [req.usuario.id, `${mes}-01`]
+    );
+    const renda = exato.length ? Number(exato[0].valor) : await obterRendaMes(req.usuario.id, mes);
+    res.json({ mes, renda, definida_neste_mes: exato.length > 0 });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar renda mensal' }); }
+});
+
+app.put('/api/gastos/renda', autenticar, async (req, res) => {
+  try {
+    const { mes, valor } = req.body;
+    if (!/^\d{4}-\d{2}$/.test(mes || '')) return res.status(400).json({ erro: 'Mês inválido' });
+    const valorNum = toNum(valor);
+    if (Number.isNaN(valorNum) || valorNum < 0) return res.status(400).json({ erro: 'Valor inválido' });
+    await pool.query(`
+      INSERT INTO public.renda_mensal (usuario_id, mes, valor)
+      VALUES ($1, $2::date, $3)
+      ON CONFLICT (usuario_id, mes) DO UPDATE SET valor=$3, atualizado_em=NOW()
+    `, [req.usuario.id, `${mes}-01`, valorNum]);
+    res.json({ sucesso: true, mensagem: 'Renda mensal salva com sucesso' });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao salvar renda mensal' }); }
+});
+
+app.get('/api/gastos/resumo', autenticar, async (req, res) => {
+  try {
+    const mes   = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : mesAtualISO();
+    const renda = await obterRendaMes(req.usuario.id, mes);
+
+    const { rows } = await pool.query(`
+      SELECT categoria, COALESCE(SUM(valor),0) AS total
+      FROM public.gastos
+      WHERE usuario_id=$1 AND cancelado_em IS NULL
+        AND data >= $2::date AND data < ($2::date + INTERVAL '1 month')
+      GROUP BY categoria
+    `, [req.usuario.id, `${mes}-01`]);
+
+    const gastoPorCategoria = { NECESSIDADE: 0, LAZER: 0, RESERVA: 0 };
+    rows.forEach(r => { gastoPorCategoria[r.categoria] = Number(r.total); });
+
+    const categorias = CATEGORIAS_GASTO.map(cat => {
+      const meta  = renda * PERCENTUAL_META[cat];
+      const gasto = gastoPorCategoria[cat];
+      return {
+        categoria:  cat,
+        percentual: PERCENTUAL_META[cat] * 100,
+        meta:       Number(meta.toFixed(2)),
+        gasto:      Number(gasto.toFixed(2)),
+        saldo:      Number((meta - gasto).toFixed(2)),
+        excedido:   gasto > meta
+      };
+    });
+
+    const totalGasto = categorias.reduce((s, c) => s + c.gasto, 0);
+    res.json({
+      mes, renda, categorias,
+      total_gasto:      Number(totalGasto.toFixed(2)),
+      total_disponivel: Number((renda - totalGasto).toFixed(2))
+    });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao calcular resumo de gastos' }); }
+});
+
+app.get('/api/gastos', autenticar, async (req, res) => {
+  try {
+    const { mes, categoria } = req.query;
+    const params = [req.usuario.id];
+    const where  = ['usuario_id=$1', 'cancelado_em IS NULL'];
+
+    if (mes && /^\d{4}-\d{2}$/.test(mes)) {
+      params.push(`${mes}-01`);
+      const idx = params.length;
+      where.push(`data >= $${idx}::date`);
+      where.push(`data <  ($${idx}::date + INTERVAL '1 month')`);
+    }
+    if (categoria && categoria !== 'TODAS') { params.push(categoria); where.push(`categoria=$${params.length}`); }
+
+    const { rows } = await pool.query(`
+      SELECT id, descricao, categoria, valor, TO_CHAR(data,'YYYY-MM-DD') AS data, observacao
+      FROM public.gastos
+      WHERE ${where.join(' AND ')}
+      ORDER BY data DESC, id DESC
+    `, params);
+    res.json(rows);
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar gastos' }); }
+});
+
+app.post('/api/gastos', autenticar, async (req, res) => {
+  try {
+    const { descricao, categoria, valor, data, observacao } = req.body;
+    if (!descricao || !descricao.trim())      return res.status(400).json({ erro: 'Descrição é obrigatória' });
+    if (!CATEGORIAS_GASTO.includes(categoria)) return res.status(400).json({ erro: 'Categoria inválida' });
+    if (!data)                                 return res.status(400).json({ erro: 'Data é obrigatória' });
+    const valorNum = toNum(valor);
+    if (Number.isNaN(valorNum) || valorNum <= 0) return res.status(400).json({ erro: 'Valor inválido' });
+
+    await pool.query(
+      'INSERT INTO public.gastos (usuario_id,descricao,categoria,valor,data,observacao) VALUES ($1,$2,$3,$4,$5,$6)',
+      [req.usuario.id, descricao.trim(), categoria, valorNum, data, observacao || null]
+    );
+    res.json({ sucesso: true, mensagem: 'Gasto registrado com sucesso' });
+    enviarEmailResumoGasto(req.usuario.id, data.slice(0, 7), { descricao: descricao.trim(), categoria, valor: valorNum })
+      .catch(err => console.error('[gastos] Promise rejeitada:', err));
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao registrar gasto' }); }
+});
+
+app.put('/api/gastos/:id', autenticar, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { descricao, categoria, valor, data, observacao } = req.body;
+    if (!descricao || !descricao.trim())      return res.status(400).json({ erro: 'Descrição é obrigatória' });
+    if (!CATEGORIAS_GASTO.includes(categoria)) return res.status(400).json({ erro: 'Categoria inválida' });
+    const valorNum = toNum(valor);
+    if (Number.isNaN(valorNum) || valorNum <= 0) return res.status(400).json({ erro: 'Valor inválido' });
+
+    await pool.query(`
+      UPDATE public.gastos
+      SET descricao=$1, categoria=$2, valor=$3, data=$4, observacao=$5, atualizado_em=NOW()
+      WHERE id=$6 AND usuario_id=$7 AND cancelado_em IS NULL
+    `, [descricao.trim(), categoria, valorNum, data, observacao || null, id, req.usuario.id]);
+    res.json({ sucesso: true, mensagem: 'Gasto atualizado com sucesso' });
+    enviarEmailResumoGasto(req.usuario.id, data.slice(0, 7), { descricao: descricao.trim(), categoria, valor: valorNum })
+      .catch(err => console.error('[gastos] Promise rejeitada:', err));
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao atualizar gasto' }); }
+});
+
+app.delete('/api/gastos/:id', autenticar, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await pool.query('UPDATE public.gastos SET cancelado_em=NOW() WHERE id=$1 AND usuario_id=$2', [id, req.usuario.id]);
+    res.json({ sucesso: true, mensagem: 'Gasto removido' });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao remover gasto' }); }
+});
+
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const port = Number(process.env.PORT || 3000);

@@ -259,6 +259,110 @@
       </div>
     </section>
 
+    <!-- ── Seção 5: Gastos pessoais (regra 50/30/20) ──────────────────── -->
+    <section class="secao" id="secGastos">
+      <div class="sec-cabecalho">
+        <h2 class="sec-titulo">🧾 Gastos Pessoais</h2>
+        <label class="label-inline">Mês
+          <select id="gastoMes"></select>
+        </label>
+      </div>
+
+      <!-- Renda mensal -->
+      <div class="painel">
+        <h2>💵 Renda mensal</h2>
+        <p class="extrato-desc">Regra prática: o orçamento é definido pelo que entra no mês, não pelo saldo disponível.</p>
+        <div class="grid grid-renda">
+          <label>Renda do mês selecionado<input id="rendaMensal" type="text" inputmode="decimal" placeholder="Ex: 5000,00" /></label>
+        </div>
+        <div class="acoes">
+          <button id="btnSalvarRenda" class="btn principal" type="button">Salvar renda</button>
+        </div>
+        <p id="rendaHerdadaAviso" class="texto-suave hidden">ℹ️ Usando a renda de um mês anterior — salve para fixar este valor neste mês.</p>
+      </div>
+
+      <!-- Cards 50/30/20 -->
+      <div class="cards cards-gastos">
+        <div class="card-resumo card-gasto">
+          <span>🏠 Necessidades (50%)</span>
+          <strong id="metaNecessidade">R$ 0,00</strong>
+          <div class="barra-progresso"><div class="barra-progresso-fill" id="barraNecessidade"></div></div>
+          <small id="gastoNecessidadeTexto" class="texto-suave"></small>
+        </div>
+        <div class="card-resumo card-gasto">
+          <span>🎉 Lazer (30%)</span>
+          <strong id="metaLazer">R$ 0,00</strong>
+          <div class="barra-progresso"><div class="barra-progresso-fill" id="barraLazer"></div></div>
+          <small id="gastoLazerTexto" class="texto-suave"></small>
+        </div>
+        <div class="card-resumo card-gasto">
+          <span>🐷 Reserva/Investir (20%)</span>
+          <strong id="metaReserva">R$ 0,00</strong>
+          <div class="barra-progresso"><div class="barra-progresso-fill" id="barraReserva"></div></div>
+          <small id="gastoReservaTexto" class="texto-suave"></small>
+        </div>
+      </div>
+
+      <!-- Novo gasto -->
+      <div class="painel">
+        <h2 id="tituloFormGasto">➕ Novo gasto</h2>
+        <form id="formGasto">
+          <input type="hidden" id="gastoId" />
+          <div class="grid">
+            <label>Descrição<input id="gastoDescricao" type="text" placeholder="Ex: Aluguel" required autocomplete="off" /></label>
+            <label>Categoria
+              <select id="gastoCategoria" required>
+                <option value="NECESSIDADE">🏠 Necessidade</option>
+                <option value="LAZER">🎉 Lazer</option>
+                <option value="RESERVA">🐷 Reserva/Investir</option>
+              </select>
+            </label>
+            <label>Valor<input id="gastoValor" type="text" inputmode="decimal" placeholder="Ex: 200,00" required /></label>
+            <label>Data<input id="gastoData" type="date" required /></label>
+          </div>
+          <label>Observação<input id="gastoObservacao" type="text" placeholder="Opcional" /></label>
+          <div class="acoes">
+            <button class="btn principal" type="submit">Salvar</button>
+            <button class="btn secundario" id="btnCancelarGasto" type="button">Cancelar</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Lista de gastos -->
+      <div class="painel">
+        <div class="barra-filtros">
+          <select id="gastoFiltroCategoria">
+            <option value="TODAS">Todas as categorias</option>
+            <option value="NECESSIDADE">🏠 Necessidade</option>
+            <option value="LAZER">🎉 Lazer</option>
+            <option value="RESERVA">🐷 Reserva/Investir</option>
+          </select>
+        </div>
+        <div class="tabela-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Descrição</th>
+                <th>Categoria</th>
+                <th>Data</th>
+                <th>Valor</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody id="tbodyGastos"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Seção 6: Empréstimos pagos, por mês ────────────────────────── -->
+    <section class="secao" id="secPagos">
+      <div class="sec-cabecalho">
+        <h2 class="sec-titulo">✅ Empréstimos Pagos</h2>
+      </div>
+      <div id="listaPagos"></div>
+    </section>
+
     <!-- ── Nav inferior (mobile) ─────────────────────────────────────── -->
     <nav class="nav-bottom">
       <button class="nav-item ativa" data-secao="secInicio">
@@ -276,6 +380,14 @@
       <button class="nav-item" data-secao="secClientes">
         <span class="nav-icon">👥</span>
         <span>Clientes</span>
+      </button>
+      <button class="nav-item" data-secao="secGastos">
+        <span class="nav-icon">🧾</span>
+        <span>Gastos</span>
+      </button>
+      <button class="nav-item" data-secao="secPagos">
+        <span class="nav-icon">✅</span>
+        <span>Pagos</span>
       </button>
     </nav>
 

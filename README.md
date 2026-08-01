@@ -24,6 +24,8 @@ Sistema web para controle de empréstimos e pagamentos. Cada usuário tem login 
 - Extrato em PDF (completo ou por pessoa), com opção de envio por e-mail
 - Alertas automáticos por e-mail: perto de vencer, vence hoje e vencido (com valor atualizado)
 - Soft delete — registros arquivados ficam no banco sem aparecer na lista
+- Empréstimos pagos organizados em aba própria, agrupados por mês de pagamento
+- Aba de Gastos Pessoais separada dos empréstimos: orçamento pela regra 50/30/20 (necessidades/lazer/reserva) calculado sobre a renda mensal informada, não sobre o saldo em conta
 - PWA: funciona instalado no celular/desktop e tem suporte offline básico
 
 ---
@@ -108,6 +110,26 @@ O script cria as tabelas `usuarios` e `pagamentos` com todos os índices necess�
 | limite_credito | NUMERIC(12,2) | Limite de crédito definido manualmente |
 | observacao | TEXT | Anotações livres |
 | foto_nome / foto_tipo / foto_dados | TEXT / TEXT / BYTEA | Foto do cliente |
+| cancelado_em | TIMESTAMPTZ | Soft delete |
+
+**renda_mensal**
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| id | BIGINT PK | Identificador |
+| usuario_id | BIGINT FK | Dono do registro |
+| mes | DATE | Mês de referência (sempre dia 1) |
+| valor | NUMERIC(12,2) | Renda informada para o mês |
+
+**gastos**
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| id | BIGINT PK | Identificador |
+| usuario_id | BIGINT FK | Dono do registro |
+| descricao | TEXT | Descrição do gasto |
+| categoria | TEXT | `NECESSIDADE` (50%), `LAZER` (30%) ou `RESERVA` (20%) |
+| valor | NUMERIC(12,2) | Valor gasto |
+| data | DATE | Data do gasto |
+| observacao | TEXT | Anotações livres |
 | cancelado_em | TIMESTAMPTZ | Soft delete |
 
 ---
