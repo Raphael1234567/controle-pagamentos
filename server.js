@@ -32,6 +32,19 @@ function uploadComprovante(req, res, next) {
   });
 }
 
+function uploadFoto(req, res, next) {
+  upload.single('foto')(req, res, err => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ erro: 'Arquivo muito grande (máx. 8MB)' });
+      return res.status(400).json({ erro: err.message || 'Erro no upload do arquivo' });
+    }
+    if (req.file && !/^image\//.test(req.file.mimetype)) {
+      return res.status(400).json({ erro: 'A foto do cliente precisa ser uma imagem' });
+    }
+    next();
+  });
+}
+
 const corsOrigin = process.env.CORS_ORIGIN;
 app.use(cors(corsOrigin ? { origin: corsOrigin } : {}));
 app.use(express.json());
@@ -141,6 +154,61 @@ function statusAutomatico(dataVencimento, dataPago) {
 }
 
 function toNum(v) { return Number(String(v).replace(/\./g, '').replace(',', '.')); }
+
+function jurosAtualizado(valor, juros, dataVencimento, dataPago) {
+  let j = Number(juros);
+  if (!dataPago) {
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const venc = new Date(`${dataVencimento}T00:00:00`); venc.setHours(0, 0, 0, 0);
+    if (hoje > venc) {
+      const atraso = Math.floor((hoje - venc) / 864e5);
+      j += atraso * (Number(valor) * 0.02);
+    }
+  }
+  return j;
+}
+
+// ─── Clientes: histórico e classificação de bom pagador ────────────────────────
+
+function calcularStatsCliente(nome, pagamentos) {
+  const doCliente = pagamentos.filter(p => p.nome === nome);
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+
+  let totalEmprestado = 0, totalPago = 0, totalEmAberto = 0;
+  let vencidosAberto = 0, pagosNoPrazo = 0, pagosComAtraso = 0;
+
+  for (const p of doCliente) {
+    const valor = Number(p.valor);
+    totalEmprestado += valor;
+    if (p.data_pago) {
+      totalPago += valor + Number(p.juros);
+      if (p.data_pago > p.data_vencimento) pagosComAtraso++; else pagosNoPrazo++;
+    } else if (!p.cancelado_em) {
+      totalEmAberto += valor + jurosAtualizado(valor, p.juros, p.data_vencimento, p.data_pago);
+      const venc = new Date(`${p.data_vencimento}T00:00:00`); venc.setHours(0, 0, 0, 0);
+      if (venc < hoje) vencidosAberto++;
+    }
+  }
+
+  const totalFinalizados = pagosNoPrazo + pagosComAtraso;
+  let classificacao;
+  if (vencidosAberto > 0)                                classificacao = 'INADIMPLENTE';
+  else if (totalFinalizados === 0)                        classificacao = 'SEM_HISTORICO';
+  else if (pagosComAtraso === 0)                          classificacao = 'BOM_PAGADOR';
+  else if (pagosComAtraso / totalFinalizados <= 0.3)      classificacao = 'REGULAR';
+  else                                                     classificacao = 'MAU_PAGADOR';
+
+  return {
+    total_emprestimos:  doCliente.length,
+    total_emprestado:   totalEmprestado.toFixed(2),
+    total_pago:         totalPago.toFixed(2),
+    total_em_aberto:    totalEmAberto.toFixed(2),
+    vencidos_aberto:    vencidosAberto,
+    pagos_no_prazo:     pagosNoPrazo,
+    pagos_com_atraso:   pagosComAtraso,
+    classificacao
+  };
+}
 
 // ─── Verificação de vencimentos por e-mail ────────────────────────────────────
 
@@ -384,6 +452,161 @@ app.get('/api/nomes', autenticar, async (req, res) => {
     );
     res.json(rows.map(r => r.nome));
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar nomes' }); }
+});
+
+// ─── Rotas: clientes ────────────────────────────────────────────────────────────
+
+app.get('/api/clientes', autenticar, async (req, res) => {
+  try {
+    const { rows: clientes } = await pool.query(`
+      SELECT id, nome, limite_credito, observacao,
+             TO_CHAR(criado_em,'YYYY-MM-DD') AS criado_em,
+             (foto_dados IS NOT NULL) AS tem_foto
+      FROM public.clientes
+      WHERE usuario_id=$1 AND cancelado_em IS NULL
+      ORDER BY nome
+    `, [req.usuario.id]);
+
+    const { rows: pagamentos } = await pool.query(`
+      SELECT nome, valor, juros,
+             TO_CHAR(data_vencimento,'YYYY-MM-DD') AS data_vencimento,
+             TO_CHAR(data_pago,'YYYY-MM-DD')       AS data_pago,
+             cancelado_em
+      FROM public.pagamentos
+      WHERE usuario_id=$1
+    `, [req.usuario.id]);
+
+    const lista = clientes.map(c => ({
+      ...c,
+      limite_credito: c.limite_credito != null ? Number(c.limite_credito) : null,
+      ...calcularStatsCliente(c.nome, pagamentos)
+    }));
+    res.json(lista);
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar clientes' }); }
+});
+
+app.get('/api/clientes/:id/historico', autenticar, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { rows: clienteRows } = await pool.query(
+      `SELECT id, nome, limite_credito, observacao, (foto_dados IS NOT NULL) AS tem_foto
+       FROM public.clientes WHERE id=$1 AND usuario_id=$2`,
+      [id, req.usuario.id]
+    );
+    const cliente = clienteRows[0];
+    if (!cliente) return res.status(404).json({ erro: 'Cliente não encontrado' });
+    cliente.limite_credito = cliente.limite_credito != null ? Number(cliente.limite_credito) : null;
+
+    const { rows } = await pool.query(`
+      SELECT id, TO_CHAR(data_pagamento,'YYYY-MM-DD')  AS data_pagamento,
+             TO_CHAR(data_vencimento,'YYYY-MM-DD')      AS data_vencimento,
+             valor, juros,
+             TO_CHAR(data_pago,'YYYY-MM-DD')            AS data_pago,
+             observacao, cancelado_em, (comprovante_dados IS NOT NULL) AS tem_comprovante
+      FROM public.pagamentos
+      WHERE usuario_id=$1 AND nome=$2
+      ORDER BY data_pagamento DESC, id DESC
+    `, [req.usuario.id, cliente.nome]);
+
+    const historico = rows.map(p => {
+      const arquivado = !!p.cancelado_em;
+      const juros = jurosAtualizado(p.valor, p.juros, p.data_vencimento, p.data_pago);
+      return {
+        id: p.id,
+        data_pagamento: p.data_pagamento,
+        data_vencimento: p.data_vencimento,
+        valor: Number(p.valor),
+        juros,
+        valor_total: Number(p.valor) + juros,
+        data_pago: p.data_pago,
+        observacao: p.observacao,
+        arquivado,
+        tem_comprovante: p.tem_comprovante,
+        status_pagamento: p.data_pago ? 'PAGO' : (arquivado ? 'ARQUIVADO' : statusAutomatico(p.data_vencimento, p.data_pago))
+      };
+    });
+
+    const stats = calcularStatsCliente(cliente.nome, rows.map(p => ({ ...p, nome: cliente.nome })));
+    res.json({ cliente, stats, historico });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar histórico do cliente' }); }
+});
+
+app.get('/api/clientes/:id/foto', autenticar, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { rows } = await pool.query(
+      'SELECT foto_nome, foto_tipo, foto_dados FROM public.clientes WHERE id=$1 AND usuario_id=$2',
+      [id, req.usuario.id]
+    );
+    const row = rows[0];
+    if (!row || !row.foto_dados) return res.status(404).json({ erro: 'Foto não encontrada' });
+    res.setHeader('Content-Type', row.foto_tipo || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(row.foto_nome || 'foto')}"`);
+    res.send(row.foto_dados);
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar foto' }); }
+});
+
+app.post('/api/clientes', autenticar, uploadFoto, async (req, res) => {
+  try {
+    const { nome, limiteCredito, observacao } = req.body;
+    if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    const nomeNorm = nome.trim().toUpperCase();
+    const limite   = (limiteCredito != null && limiteCredito !== '') ? toNum(limiteCredito) : null;
+
+    await pool.query(
+      'INSERT INTO public.clientes (usuario_id,nome,limite_credito,observacao,foto_nome,foto_tipo,foto_dados) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [req.usuario.id, nomeNorm, limite, observacao || null,
+       req.file ? req.file.originalname : null,
+       req.file ? req.file.mimetype     : null,
+       req.file ? req.file.buffer       : null]
+    );
+    res.json({ sucesso: true, mensagem: 'Cliente cadastrado com sucesso' });
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ erro: 'Já existe um cliente cadastrado com esse nome' });
+    console.error(e); res.status(500).json({ erro: 'Erro ao cadastrar cliente' });
+  }
+});
+
+app.put('/api/clientes/:id', autenticar, uploadFoto, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { nome, limiteCredito, observacao, removerFoto } = req.body;
+    if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    const nomeNorm = nome.trim().toUpperCase();
+    const limite   = (limiteCredito != null && limiteCredito !== '') ? toNum(limiteCredito) : null;
+
+    const params = [nomeNorm, limite, observacao || null];
+    let fotoSql = '';
+    if (req.file) {
+      params.push(req.file.originalname, req.file.mimetype, req.file.buffer);
+      fotoSql = `, foto_nome=$${params.length - 2}, foto_tipo=$${params.length - 1}, foto_dados=$${params.length}`;
+    } else if (removerFoto === '1' || removerFoto === 'true') {
+      fotoSql = `, foto_nome=NULL, foto_tipo=NULL, foto_dados=NULL`;
+    }
+    params.push(id, req.usuario.id);
+
+    await pool.query(`
+      UPDATE public.clientes
+      SET nome=$1, limite_credito=$2, observacao=$3, atualizado_em=NOW()${fotoSql}
+      WHERE id=$${params.length - 1} AND usuario_id=$${params.length} AND cancelado_em IS NULL
+    `, params);
+
+    res.json({ sucesso: true, mensagem: 'Cliente atualizado com sucesso' });
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ erro: 'Já existe um cliente cadastrado com esse nome' });
+    console.error(e); res.status(500).json({ erro: 'Erro ao atualizar cliente' });
+  }
+});
+
+app.delete('/api/clientes/:id', autenticar, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await pool.query(
+      'UPDATE public.clientes SET cancelado_em=NOW() WHERE id=$1 AND usuario_id=$2',
+      [id, req.usuario.id]
+    );
+    res.json({ sucesso: true, mensagem: 'Cliente removido' });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao remover cliente' }); }
 });
 
 // ─── Rotas: pagamentos ────────────────────────────────────────────────────────
@@ -844,7 +1067,7 @@ app.get('/api/extratos/pessoa/:nome/pdf', autenticar, async (req, res) => {
     const rows = await fetchExtratoRows(req.usuario.id, { nome, dataInicio, dataFim, status });
     if (!rows.length) return res.status(404).json({ erro: 'Nenhum registro encontrado para esta pessoa' });
 
-    const titulo    = `Extrato - ${nome}`;
+    const titulo    = `Rapha Negócios · Extrato - ${nome}`;
     const subtitulo = `Usuario: ${req.usuario.nome}  |  ${rows.length} registro(s)  |  ${new Date().toLocaleDateString('pt-BR')}`;
     const buf = await buildExtratoPDF(rows, titulo, subtitulo);
     const safeName = nome.toLowerCase().replace(/[^a-z0-9]/g, '-');
@@ -865,7 +1088,7 @@ app.post('/api/extratos/pessoa/:nome/email', autenticar, async (req, res) => {
     const rows = await fetchExtratoRows(req.usuario.id, { nome, dataInicio, dataFim, status });
     if (!rows.length) return res.status(404).json({ erro: 'Nenhum registro encontrado para esta pessoa' });
 
-    const titulo    = `Extrato - ${nome}`;
+    const titulo    = `Rapha Negócios · Extrato - ${nome}`;
     const subtitulo = `Usuario: ${req.usuario.nome}  |  ${rows.length} registro(s)  |  ${new Date().toLocaleDateString('pt-BR')}`;
     const buf = await buildExtratoPDF(rows, titulo, subtitulo);
     const safeName = nome.toLowerCase().replace(/[^a-z0-9]/g, '-');

@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#1e3a8a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Pagamentos" />
-  <title>Controle de Pagamentos</title>
+  <meta name="apple-mobile-web-app-title" content="Rapha Negócios" />
+  <title>Rapha Negócios - Controle de Pagamentos</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="manifest" href="manifest.json" />
 </head>
@@ -18,8 +18,8 @@
   <!-- ── Auth ─────────────────────────────────────────────────────────── -->
   <section id="authArea" class="auth-card">
     <div class="auth-logo">💰</div>
-    <h1>Controle de Pagamentos</h1>
-    <p>Entre para acessar seus pagamentos</p>
+    <h1>Rapha Negócios</h1>
+    <p>Controle de Pagamentos — entre para acessar seus pagamentos</p>
 
     <div class="tabs">
       <button id="tabLogin" class="tab ativa">Login</button>
@@ -45,7 +45,7 @@
 
     <header class="topo">
       <div class="topo-info">
-        <h1>💰 Pagamentos</h1>
+        <h1>💰 Rapha Negócios</h1>
         <p id="usuarioLogado"></p>
       </div>
       <div class="topo-acoes">
@@ -219,6 +219,40 @@
       </div>
     </section>
 
+    <!-- ── Seção 4: Clientes ───────────────────────────────────────────── -->
+    <section class="secao" id="secClientes">
+      <div class="sec-cabecalho">
+        <h2 class="sec-titulo">👥 Clientes</h2>
+        <button id="btnNovoCliente" class="btn principal" type="button">+ Novo cliente</button>
+      </div>
+
+      <div class="painel hidden" id="painelFormCliente">
+        <h2 id="tituloFormCliente">👤 Novo cliente</h2>
+        <form id="formCliente">
+          <input type="hidden" id="clienteId" />
+          <div class="grid grid-cliente">
+            <label>Nome<input id="clienteNome" type="text" placeholder="Ex: JOÃO" required autocomplete="off" /></label>
+            <label>Limite de crédito<input id="clienteLimite" type="text" inputmode="decimal" placeholder="Opcional" /></label>
+          </div>
+          <label>Observação<input id="clienteObservacao" type="text" placeholder="Opcional" /></label>
+          <label>Foto do cliente<input id="clienteFoto" type="file" accept="image/*" /></label>
+          <div id="clienteFotoAtual" class="comprovante-atual hidden">
+            <span>📷 Foto atual —</span>
+            <button class="btn-link" id="btnVerFotoCliente" type="button">Ver</button>
+            <label class="label-inline-check"><input id="removerFotoCliente" type="checkbox" /> Remover</label>
+          </div>
+          <div class="acoes">
+            <button class="btn principal" type="submit">Salvar</button>
+            <button class="btn secundario" id="btnCancelarCliente" type="button">Cancelar</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="painel">
+        <div id="listaClientes" class="clientes-grid"></div>
+      </div>
+    </section>
+
     <!-- ── Nav inferior (mobile) ─────────────────────────────────────── -->
     <nav class="nav-bottom">
       <button class="nav-item ativa" data-secao="secInicio">
@@ -232,6 +266,10 @@
       <button class="nav-item" data-secao="secLista">
         <span class="nav-icon">📋</span>
         <span>Lista</span>
+      </button>
+      <button class="nav-item" data-secao="secClientes">
+        <span class="nav-icon">👥</span>
+        <span>Clientes</span>
       </button>
     </nav>
 
@@ -296,6 +334,43 @@
       <div class="modal-acoes">
         <button id="btnConfirmarPago" class="btn principal" type="button">Confirmar</button>
         <button id="btnCancelarPago"  class="btn secundario" type="button">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: histórico do cliente -->
+  <div id="modalHistorico" class="modal-overlay hidden">
+    <div class="modal-box modal-historico">
+      <div class="historico-cabecalho">
+        <img id="histFoto" class="cliente-foto-grande hidden" alt="Foto do cliente" />
+        <div id="histFotoPlaceholder" class="cliente-foto-grande cliente-foto-placeholder">👤</div>
+        <div>
+          <h3 id="histNome"></h3>
+          <span id="histClassificacao" class="badge-classificacao"></span>
+        </div>
+      </div>
+
+      <div class="historico-stats" id="histStats"></div>
+
+      <div class="tabela-wrapper">
+        <table class="tabela-historico">
+          <thead>
+            <tr>
+              <th>Pegou</th>
+              <th>Vence</th>
+              <th>Valor</th>
+              <th>Juros</th>
+              <th>Total</th>
+              <th>Status</th>
+              <th>Pago em</th>
+            </tr>
+          </thead>
+          <tbody id="histTbody"></tbody>
+        </table>
+      </div>
+
+      <div class="modal-acoes">
+        <button id="btnFecharHistorico" class="btn secundario" type="button">Fechar</button>
       </div>
     </div>
   </div>

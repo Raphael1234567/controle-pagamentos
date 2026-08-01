@@ -61,9 +61,34 @@ const btnEnviarExtrato    = $('btnEnviarExtrato');
 const btnFecharExtrato    = $('btnFecharExtrato');
 const btnExtratoCompleto  = $('btnExtratoCompleto');
 
+const btnNovoCliente      = $('btnNovoCliente');
+const painelFormCliente   = $('painelFormCliente');
+const formCliente         = $('formCliente');
+const clienteId           = $('clienteId');
+const clienteNome         = $('clienteNome');
+const clienteLimite       = $('clienteLimite');
+const clienteObservacao   = $('clienteObservacao');
+const clienteFoto         = $('clienteFoto');
+const clienteFotoAtual    = $('clienteFotoAtual');
+const btnVerFotoCliente   = $('btnVerFotoCliente');
+const removerFotoCliente  = $('removerFotoCliente');
+const btnCancelarCliente  = $('btnCancelarCliente');
+const tituloFormCliente   = $('tituloFormCliente');
+const listaClientes       = $('listaClientes');
+
+const modalHistorico      = $('modalHistorico');
+const histFoto            = $('histFoto');
+const histFotoPlaceholder = $('histFotoPlaceholder');
+const histNome            = $('histNome');
+const histClassificacao   = $('histClassificacao');
+const histStats           = $('histStats');
+const histTbody           = $('histTbody');
+const btnFecharHistorico  = $('btnFecharHistorico');
+
 // ─── Estado ───────────────────────────────────────────────────────────────────
 
 let pagamentos       = [];
+let clientes         = [];
 let modoCadastro     = false;
 let _resolveDataPago = null;
 let extratoNomePessoa = null;
@@ -555,7 +580,7 @@ function esconderLoading() {
 async function carregarTudo() {
   mostrarLoading();
   try {
-    await Promise.all([carregarResumo(), carregarPagamentos(), carregarGraficos(), carregarNomes(), carregarLucroMes()]);
+    await Promise.all([carregarResumo(), carregarPagamentos(), carregarGraficos(), carregarNomes(), carregarLucroMes(), carregarClientes()]);
   } finally { esconderLoading(); }
 }
 
@@ -613,7 +638,7 @@ function renderizar() {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td data-label="Pagamentos">
-        <strong>${item.nome}</strong>
+        <button class="nome-clicavel" type="button" title="Ver histórico deste cliente" data-nome="${nomeAttr}" onclick="window.verHistoricoPorNome(this.dataset.nome)">${item.nome}</button>
         ${item.observacao ? `<br><small style="color:#667085">${item.observacao}</small>` : ''}
       </td>
       <td data-label="Data que pegou">${dataBR(item.data_pagamento)}</td>
@@ -715,6 +740,196 @@ function limparForm() {
   comprovanteAtual.classList.add('hidden');
   tituloForm.textContent = '💰 Novo pagamento';
 }
+
+// ─── Clientes ─────────────────────────────────────────────────────────────────
+
+const CLASSIFICACAO_LABEL = {
+  BOM_PAGADOR:   '🟢 Bom pagador',
+  REGULAR:       '🟡 Pagador regular',
+  MAU_PAGADOR:   '🔴 Mau pagador',
+  INADIMPLENTE:  '🔴 Inadimplente',
+  SEM_HISTORICO: '⚪ Sem histórico'
+};
+
+async function carregarClientes() {
+  const res = await fetch(`${API_BASE}/clientes`, { headers: headers() });
+  if (!res.ok) return;
+  clientes = await res.json();
+  renderizarClientes();
+}
+
+function renderizarClientes() {
+  listaClientes.innerHTML = '';
+  if (!clientes.length) {
+    listaClientes.innerHTML = '<p style="text-align:center;color:#667085;padding:24px;grid-column:1/-1">Nenhum cliente cadastrado ainda</p>';
+    return;
+  }
+  clientes.forEach(c => {
+    const foto = c.tem_foto
+      ? `<img class="cliente-foto" src="${API_BASE}/clientes/${c.id}/foto" alt="${c.nome}" />`
+      : `<div class="cliente-foto-placeholder">👤</div>`;
+    const limiteExcedido = c.limite_credito != null && Number(c.total_em_aberto) > c.limite_credito;
+    const card = document.createElement('div');
+    card.className = 'cliente-card';
+    card.innerHTML = `
+      <div class="cliente-card-topo">
+        ${foto}
+        <div>
+          <span class="cliente-card-nome">${c.nome}</span>
+          <span class="badge-classificacao ${c.classificacao}">${CLASSIFICACAO_LABEL[c.classificacao] || c.classificacao}</span>
+        </div>
+      </div>
+      <div class="cliente-card-stats">
+        <div><span>Limite</span><strong>${c.limite_credito != null ? moeda(c.limite_credito) : '—'}</strong></div>
+        <div><span>Em aberto</span><strong>${moeda(c.total_em_aberto)}</strong></div>
+        <div><span>Empréstimos</span><strong>${c.total_emprestimos}</strong></div>
+      </div>
+      ${limiteExcedido ? '<div class="cliente-card-alerta">⚠️ Limite de crédito excedido</div>' : ''}
+      <div class="cliente-card-acoes">
+        <button class="btn secundario" type="button" onclick="window.verHistoricoCliente(${c.id})">📜 Histórico</button>
+        <button class="btn secundario" type="button" onclick="window.editarCliente(${c.id})">✏️</button>
+        <button class="btn perigo" type="button" onclick="window.removerCliente(${c.id})">🗑️</button>
+      </div>
+    `;
+    listaClientes.appendChild(card);
+  });
+}
+
+function limparFormCliente() {
+  formCliente.reset();
+  clienteId.value = '';
+  removerFotoCliente.checked = false;
+  clienteFotoAtual.classList.add('hidden');
+  tituloFormCliente.textContent = '👤 Novo cliente';
+}
+
+btnNovoCliente.addEventListener('click', () => {
+  limparFormCliente();
+  painelFormCliente.classList.remove('hidden');
+  painelFormCliente.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+btnCancelarCliente.addEventListener('click', () => {
+  limparFormCliente();
+  painelFormCliente.classList.add('hidden');
+});
+
+formCliente.addEventListener('submit', async e => {
+  e.preventDefault();
+  const id = clienteId.value;
+  const fd = new FormData();
+  fd.append('nome', clienteNome.value);
+  if (clienteLimite.value.trim()) fd.append('limiteCredito', toValorNumero(clienteLimite.value));
+  fd.append('observacao', clienteObservacao.value);
+  if (clienteFoto.files[0]) fd.append('foto', clienteFoto.files[0]);
+  if (removerFotoCliente.checked) fd.append('removerFoto', '1');
+
+  const res  = await fetch(id ? `${API_BASE}/clientes/${id}` : `${API_BASE}/clientes`, {
+    method: id ? 'PUT' : 'POST', headers: headers(), body: fd
+  });
+  const data = await res.json();
+  if (!res.ok) { toast(data.erro || 'Erro ao salvar cliente'); return; }
+  limparFormCliente();
+  painelFormCliente.classList.add('hidden');
+  await carregarClientes();
+  toast(data.mensagem || 'Cliente salvo com sucesso');
+});
+
+window.editarCliente = function (id) {
+  const c = clientes.find(x => Number(x.id) === Number(id));
+  if (!c) { toast('Cliente não encontrado'); return; }
+  clienteId.value         = c.id;
+  clienteNome.value       = c.nome;
+  clienteLimite.value     = c.limite_credito != null ? String(Number(c.limite_credito).toFixed(2)).replace('.', ',') : '';
+  clienteObservacao.value = c.observacao || '';
+  clienteFoto.value       = '';
+  removerFotoCliente.checked = false;
+  clienteFotoAtual.classList.toggle('hidden', !c.tem_foto);
+  tituloFormCliente.textContent = '✏️ Editar cliente';
+  painelFormCliente.classList.remove('hidden');
+  painelFormCliente.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+window.removerCliente = async function (id) {
+  if (!confirm('Remover este cliente cadastrado? O histórico de empréstimos dele continua salvo.')) return;
+  const res  = await fetch(`${API_BASE}/clientes/${id}`, { method: 'DELETE', headers: headers() });
+  const data = await res.json();
+  if (!res.ok) { toast(data.erro || 'Erro ao remover cliente'); return; }
+  await carregarClientes();
+  toast(data.mensagem || 'Cliente removido');
+};
+
+btnVerFotoCliente.addEventListener('click', async () => {
+  if (!clienteId.value) return;
+  const res = await fetch(`${API_BASE}/clientes/${clienteId.value}/foto`, { headers: headers() });
+  if (!res.ok) { toast('Erro ao abrir foto'); return; }
+  const blob = await res.blob();
+  window.open(URL.createObjectURL(blob), '_blank');
+});
+
+window.verHistoricoCliente = async function (id) {
+  const res = await fetch(`${API_BASE}/clientes/${id}/historico`, { headers: headers() });
+  if (!res.ok) { toast('Erro ao buscar histórico'); return; }
+  const { cliente, stats, historico } = await res.json();
+  abrirModalHistorico(cliente, stats, historico);
+};
+
+window.verHistoricoPorNome = function (nomePessoa) {
+  const c = clientes.find(x => x.nome === nomePessoa);
+  if (c) { window.verHistoricoCliente(c.id); return; }
+  busca.value = nomePessoa;
+  carregarPagamentos();
+  toast('Cliente ainda não cadastrado — filtrando a lista por esse nome. Cadastre-o na aba Clientes para ver o histórico completo.');
+};
+
+function abrirModalHistorico(cliente, stats, historico) {
+  histNome.textContent = cliente.nome;
+  histClassificacao.textContent = CLASSIFICACAO_LABEL[stats.classificacao] || stats.classificacao;
+  histClassificacao.className   = `badge-classificacao ${stats.classificacao}`;
+
+  if (cliente.tem_foto) {
+    histFoto.src = `${API_BASE}/clientes/${cliente.id}/foto`;
+    histFoto.classList.remove('hidden');
+    histFotoPlaceholder.classList.add('hidden');
+  } else {
+    histFoto.classList.add('hidden');
+    histFotoPlaceholder.classList.remove('hidden');
+  }
+
+  const limiteExcedido = cliente.limite_credito != null && Number(stats.total_em_aberto) > cliente.limite_credito;
+  histStats.innerHTML = `
+    <div class="stat-mini"><span>Limite</span><strong>${cliente.limite_credito != null ? moeda(cliente.limite_credito) : '—'}</strong></div>
+    <div class="stat-mini ${limiteExcedido ? 'alerta' : ''}"><span>Em aberto</span><strong>${moeda(stats.total_em_aberto)}</strong></div>
+    <div class="stat-mini"><span>Total pago</span><strong>${moeda(stats.total_pago)}</strong></div>
+    <div class="stat-mini"><span>Já pegou</span><strong>${moeda(stats.total_emprestado)}</strong></div>
+    <div class="stat-mini"><span>Pontual</span><strong>${stats.pagos_no_prazo}</strong></div>
+    <div class="stat-mini ${stats.pagos_com_atraso > 0 ? 'alerta' : ''}"><span>Com atraso</span><strong>${stats.pagos_com_atraso}</strong></div>
+  `;
+
+  histTbody.innerHTML = '';
+  if (!historico.length) {
+    histTbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#667085;padding:20px">Nenhum empréstimo registrado</td></tr>';
+  } else {
+    historico.forEach(h => {
+      const tr = document.createElement('tr');
+      if (h.arquivado) tr.classList.add('arquivado');
+      tr.innerHTML = `
+        <td>${dataBR(h.data_pagamento)}</td>
+        <td>${dataBR(h.data_vencimento)}</td>
+        <td>${moeda(h.valor)}</td>
+        <td>${moeda(h.juros)}</td>
+        <td><strong>${moeda(h.valor_total)}</strong></td>
+        <td><span class="status ${h.status_pagamento === 'ARQUIVADO' ? 'PAGO' : h.status_pagamento}">${h.arquivado ? 'Arquivado' : statusTexto(h.status_pagamento)}</span></td>
+        <td>${h.data_pago ? dataBR(h.data_pago) : '-'}</td>
+      `;
+      histTbody.appendChild(tr);
+    });
+  }
+
+  modalHistorico.classList.remove('hidden');
+}
+
+btnFecharHistorico.addEventListener('click', () => modalHistorico.classList.add('hidden'));
 
 // ─── Event listeners ──────────────────────────────────────────────────────────
 

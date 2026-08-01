@@ -9,6 +9,7 @@ Sistema web para controle de empréstimos e pagamentos. Cada usuário tem login 
 - Cadastro e login de usuários (senha criptografada com bcrypt, sessão via JWT)
 - CRUD completo de pagamentos (criar, editar, marcar como pago, arquivar)
 - Anexo de comprovante de pagamento (foto ou PDF, até 8MB) por empréstimo
+- Cadastro de clientes com foto e limite de crédito, com histórico completo de empréstimos vinculado pelo nome e classificação automática de bom/mau pagador
 - Cálculo automático de juros: **40% ao mês** + **2% ao dia** de atraso
 - Status automático calculado no servidor:
   - **PENDENTE** — vence em mais de 3 dias
@@ -97,6 +98,17 @@ O script cria as tabelas `usuarios` e `pagamentos` com todos os índices necess�
 | comprovante_nome | TEXT | Nome original do arquivo de comprovante |
 | comprovante_tipo | TEXT | Mime type do comprovante (imagem ou PDF) |
 | comprovante_dados | BYTEA | Conteúdo binário do comprovante |
+
+**clientes**
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| id | BIGINT PK | Identificador |
+| usuario_id | BIGINT FK | Dono do cadastro |
+| nome | TEXT | Nome do cliente (único por usuário, vincula com pagamentos.nome) |
+| limite_credito | NUMERIC(12,2) | Limite de crédito definido manualmente |
+| observacao | TEXT | Anotações livres |
+| foto_nome / foto_tipo / foto_dados | TEXT / TEXT / BYTEA | Foto do cliente |
+| cancelado_em | TIMESTAMPTZ | Soft delete |
 
 ---
 

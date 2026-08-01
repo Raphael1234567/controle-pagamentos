@@ -1,6 +1,6 @@
 {
-  "name": "Controle de Pagamentos",
-  "short_name": "Pagamentos",
+  "name": "Rapha Negócios - Controle de Pagamentos",
+  "short_name": "Rapha Negócios",
   "description": "Sistema de controle de pagamentos e empréstimos",
   "start_url": "/",
   "display": "standalone",
