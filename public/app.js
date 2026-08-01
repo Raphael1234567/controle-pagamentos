@@ -1029,6 +1029,7 @@ async function carregarGastosResumo() {
     const r = await resRenda.json();
     rendaMensal.value = r.renda > 0 ? String(r.renda.toFixed(2)).replace('.', ',') : '';
     rendaHerdadaAviso.classList.toggle('hidden', r.definida_neste_mes || r.renda === 0);
+    btnSalvarRenda.textContent = r.definida_neste_mes ? '✏️ Atualizar renda' : '💾 Salvar renda';
   }
   if (resResumo.ok) {
     const resumo = await resResumo.json();
