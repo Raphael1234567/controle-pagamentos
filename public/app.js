@@ -32,6 +32,10 @@ const selectClienteDash = $('filtroClienteDash');
 const btnCancelar         = $('btnCancelar');
 const tituloForm          = $('tituloForm');
 const totalAReceber       = $('totalAReceber');
+const comprovanteInput    = $('comprovante');
+const comprovanteAtual    = $('comprovanteAtual');
+const btnVerComprovante   = $('btnVerComprovante');
+const removerComprovante  = $('removerComprovante');
 
 const inputDataInicio = $('inputDataInicio');
 const inputDataFim    = $('inputDataFim');
@@ -205,7 +209,7 @@ function mostrarApp() {
   if (token() && u) {
     authArea.classList.add('hidden');
     appArea.classList.remove('hidden');
-    usuarioLogado.textContent = `${u.nome} · ${u.email}`;
+    usuarioLogado.textContent = `👋 Olá, ${u.nome || u.email}! · ${u.email}`;
     popularMesResumo();
     carregarTudo();
   } else {
@@ -320,12 +324,12 @@ function renderGraficoMensal(dados) {
         {
           label: 'Emprestado',
           data: dados.map(d => Number(d.total_emprestado)),
-          borderColor: '#157347',
-          backgroundColor: 'rgba(21,115,71,.12)',
+          borderColor: '#1d4ed8',
+          backgroundColor: 'rgba(29,78,216,.12)',
           fill: true,
           tension: .4,
           pointRadius: 5,
-          pointBackgroundColor: '#157347'
+          pointBackgroundColor: '#1d4ed8'
         },
         {
           label: 'Juros',
@@ -372,7 +376,7 @@ function renderGraficoStatus(dados) {
       labels: ['Pago', 'Pendente', 'Perto de vencer', 'Vencido'],
       datasets: [{
         data: [dados.pago, dados.pendente, dados.perto, dados.vencido],
-        backgroundColor: ['#067647', '#94a3b8', '#f59e0b', '#ef4444'],
+        backgroundColor: ['#16a34a', '#94a3b8', '#f59e0b', '#dc2626'],
         borderWidth: 2,
         borderColor: '#fff',
         hoverOffset: 6
@@ -406,7 +410,7 @@ function renderGraficoClientes(dados) {
   const h    = Math.max(180, dados.length * 38);
   wrap.style.height = `${h}px`;
   if (chartClientes) chartClientes.destroy();
-  const palette = ['#0f5132','#157347','#1a8a56','#1e9f64','#23b472','#27c980','#2cde8e','#52eba0'];
+  const palette = ['#1e3a8a','#1d4ed8','#2563eb','#3b82f6','#60a5fa','#93c5fd','#0ea5e9','#38bdf8'];
   chartClientes = new Chart(ctx, {
     type: 'bar',
     data: {
@@ -414,7 +418,7 @@ function renderGraficoClientes(dados) {
       datasets: [{
         label: 'Total a receber',
         data: dados.map(d => Number(d.total)),
-        backgroundColor: dados.map((_, i) => palette[i] || '#157347'),
+        backgroundColor: dados.map((_, i) => palette[i] || '#1d4ed8'),
         borderRadius: 6,
         borderSkipped: false
       }]
@@ -536,7 +540,22 @@ async function carregarPagamentos() {
 }
 
 async function carregarTudo() {
-  await Promise.all([carregarResumo(), carregarPagamentos(), carregarGraficos(), carregarNomes()]);
+  await Promise.all([carregarResumo(), carregarPagamentos(), carregarGraficos(), carregarNomes(), carregarLucroMes()]);
+}
+
+async function carregarLucroMes() {
+  const banner = $('bannerLucro');
+  try {
+    const res = await fetch(`${API_BASE}/lucro-mes`, { headers: headers() });
+    if (!res.ok) { banner.classList.add('hidden'); return; }
+    const r = await res.json();
+    const lucro = Number(r.lucro || 0);
+    banner.textContent = lucro > 0
+      ? `💰 Você lucrou ${moeda(lucro)} em ${formatarMesLabel(r.mes)} (juros recebidos, mesmo de pagamentos já excluídos do sistema)`
+      : `📅 Nenhum lucro registrado em ${formatarMesLabel(r.mes)} ainda`;
+    banner.classList.toggle('zero', lucro <= 0);
+    banner.classList.remove('hidden');
+  } catch { banner.classList.add('hidden'); }
 }
 
 async function carregarListaEResumo() {
@@ -557,12 +576,17 @@ function renderizar() {
     const pago       = !!item.data_pago;
     const nomeAttr   = item.nome.replace(/"/g, '&quot;');
     const extratoBtn = `<button class="btn secundario" type="button" title="Extrato desta pessoa" data-nome="${nomeAttr}" onclick="window.abrirExtratoPessoa(this.dataset.nome)">📄</button>`;
+    const comprovanteBtn = item.tem_comprovante
+      ? `<button class="btn secundario" type="button" title="Ver comprovante" onclick="window.abrirComprovante(${item.id})">📎</button>`
+      : '';
     const botoes = pago
       ? `<span class="texto-suave">Pago</span>
+         ${comprovanteBtn}
          ${extratoBtn}
          <button class="btn perigo" type="button" title="Arquivar" onclick="arquivarPagamento(${item.id})">🗑️</button>`
       : `<button class="btn secundario" type="button" onclick="editarPagamento(${item.id})">Editar</button>
          <button class="btn principal"  type="button" onclick="marcarComoPago(${item.id})">Marcar pago</button>
+         ${comprovanteBtn}
          ${extratoBtn}
          <button class="btn perigo"     type="button" title="Arquivar" onclick="arquivarPagamento(${item.id})">🗑️</button>`;
 
@@ -579,7 +603,7 @@ function renderizar() {
       <td data-label="Total a receber"><strong>${moeda(item.valor_total)}</strong></td>
       <td data-label="Status">
         <span class="status ${item.status_pagamento}">${statusTexto(item.status_pagamento)}</span>
-        ${Number(item.dias_atraso) > 0 ? `<br><small style="color:#b42318;font-size:12px">${item.dias_atraso} dia(s) em atraso</small>` : ''}
+        ${Number(item.dias_atraso) > 0 ? `<br><small style="color:#dc2626;font-size:12px">${item.dias_atraso} dia(s) em atraso</small>` : ''}
       </td>
       <td data-label="Pago em">${item.data_pago ? dataBR(item.data_pago) : '-'}</td>
       <td data-label="Ações" style="white-space:nowrap;display:flex;gap:6px;flex-wrap:wrap">${botoes}</td>
@@ -593,18 +617,20 @@ function renderizar() {
 async function salvar(e) {
   e.preventDefault();
   const id = pagamentoId.value;
-  const payload = {
-    nome:          nome.value,
-    dataPagamento: dataPagamento.value,
-    dataVencimento: dataVencimento.value,
-    valor:         toValorNumero(valor.value),
-    observacao:    observacao.value
-  };
+  const fd = new FormData();
+  fd.append('nome',           nome.value);
+  fd.append('dataPagamento',  dataPagamento.value);
+  fd.append('dataVencimento', dataVencimento.value);
+  fd.append('valor',          toValorNumero(valor.value));
+  fd.append('observacao',     observacao.value);
   if (totalAReceber.value.trim()) {
-    payload.totalAReceber = toValorNumero(totalAReceber.value);
+    fd.append('totalAReceber', toValorNumero(totalAReceber.value));
   }
+  if (comprovanteInput.files[0]) fd.append('comprovante', comprovanteInput.files[0]);
+  if (removerComprovante.checked) fd.append('removerComprovante', '1');
+
   const res  = await fetch(id ? `${API_BASE}/pagamentos/${id}` : `${API_BASE}/pagamentos`, {
-    method: id ? 'PUT' : 'POST', headers: headers(true), body: JSON.stringify(payload)
+    method: id ? 'PUT' : 'POST', headers: headers(), body: fd
   });
   const data = await res.json();
   if (!res.ok) { toast(data.erro || 'Erro ao salvar'); return; }
@@ -613,6 +639,13 @@ async function salvar(e) {
   toast(data.mensagem || 'Salvo com sucesso');
   mostrarSecao('secLista');
 }
+
+window.abrirComprovante = async function (id) {
+  const res = await fetch(`${API_BASE}/pagamentos/${id}/comprovante`, { headers: headers() });
+  if (!res.ok) { toast('Erro ao abrir comprovante'); return; }
+  const blob = await res.blob();
+  window.open(URL.createObjectURL(blob), '_blank');
+};
 
 window.editarPagamento = function (id) {
   const item = pagamentos.find(p => Number(p.id) === Number(id));
@@ -624,7 +657,10 @@ window.editarPagamento = function (id) {
   valor.value          = String(Number(item.valor).toFixed(2)).replace('.', ',');
   observacao.value     = item.observacao || '';
   totalAReceber.value  = String(Number(item.valor_total).toFixed(2)).replace('.', ',');
-  tituloForm.textContent = 'Editar pagamento';
+  comprovanteInput.value    = '';
+  removerComprovante.checked = false;
+  comprovanteAtual.classList.toggle('hidden', !item.tem_comprovante);
+  tituloForm.textContent = '✏️ Editar pagamento';
   mostrarSecao('secNovo');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 };
@@ -655,7 +691,9 @@ function limparForm() {
   pagamentoId.value      = '';
   dataVencimento.value   = '';
   totalAReceber.value    = '';
-  tituloForm.textContent = 'Novo pagamento';
+  removerComprovante.checked = false;
+  comprovanteAtual.classList.add('hidden');
+  tituloForm.textContent = '💰 Novo pagamento';
 }
 
 // ─── Event listeners ──────────────────────────────────────────────────────────
@@ -670,6 +708,9 @@ dataVencimento.addEventListener('change', atualizarTotalCalculado);
 
 form.addEventListener('submit', salvar);
 btnCancelar.addEventListener('click', limparForm);
+btnVerComprovante.addEventListener('click', () => {
+  if (pagamentoId.value) window.abrirComprovante(pagamentoId.value);
+});
 btnAtualizar.addEventListener('click', carregarTudo);
 mesResumo.addEventListener('change', () => { carregarResumo(); carregarGraficos(); });
 selectClienteDash.addEventListener('change', () => {

@@ -8,6 +8,7 @@ Sistema web para controle de empréstimos e pagamentos. Cada usuário tem login 
 
 - Cadastro e login de usuários (senha criptografada com bcrypt, sessão via JWT)
 - CRUD completo de pagamentos (criar, editar, marcar como pago, arquivar)
+- Anexo de comprovante de pagamento (foto ou PDF, até 8MB) por empréstimo
 - Cálculo automático de juros: **40% ao mês** + **2% ao dia** de atraso
 - Status automático calculado no servidor:
   - **PENDENTE** — vence em mais de 3 dias
@@ -35,6 +36,7 @@ Sistema web para controle de empréstimos e pagamentos. Cada usuário tem login 
 | Autenticação | JWT + bcryptjs |
 | E-mail | Nodemailer (SMTP) |
 | PDF | PDFKit |
+| Upload de arquivos | Multer |
 | Frontend | HTML + CSS + JavaScript puro |
 | Gráficos | Chart.js |
 
@@ -92,6 +94,9 @@ O script cria as tabelas `usuarios` e `pagamentos` com todos os índices necess�
 | cancelado_em | TIMESTAMPTZ | Soft delete |
 | email_vencimento_enviado | BOOLEAN | Controla envio único do alerta de vencido |
 | email_proximo_enviado | BOOLEAN | Controla envio único do alerta de perto/hoje |
+| comprovante_nome | TEXT | Nome original do arquivo de comprovante |
+| comprovante_tipo | TEXT | Mime type do comprovante (imagem ou PDF) |
+| comprovante_dados | BYTEA | Conteúdo binário do comprovante |
 
 ---
 

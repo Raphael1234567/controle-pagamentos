@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0f5132" />
+  <meta name="theme-color" content="#1e3a8a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Pagamentos" />
@@ -54,6 +54,8 @@
       </div>
     </header>
 
+    <div id="bannerLucro" class="banner-lucro hidden"></div>
+
     <!-- ── Seção 1: Dashboard ─────────────────────────────────────────── -->
     <section class="secao secao-ativa" id="secInicio">
 
@@ -74,23 +76,23 @@
       <!-- Cards financeiros -->
       <div class="cards">
         <div class="card-resumo">
-          <span>Total sem juros</span>
+          <span>💵 Total sem juros</span>
           <strong id="totalEmprestado">R$ 0,00</strong>
         </div>
         <div class="card-resumo">
-          <span>Total de juros</span>
+          <span>📈 Total de juros</span>
           <strong id="totalJuros">R$ 0,00</strong>
         </div>
         <div class="card-resumo destaque">
-          <span>Total a receber</span>
+          <span>💰 Total a receber</span>
           <strong id="totalComJuros">R$ 0,00</strong>
         </div>
         <div class="card-resumo recebido">
-          <span>Total recebido</span>
+          <span>💸 Total recebido</span>
           <strong id="totalRecebido">R$ 0,00</strong>
         </div>
         <div class="card-resumo alerta">
-          <span>Total vencido</span>
+          <span>🚨 Total vencido</span>
           <strong id="totalVencido">R$ 0,00</strong>
         </div>
       </div>
@@ -124,7 +126,7 @@
     <!-- ── Seção 2: Novo pagamento ────────────────────────────────────── -->
     <section class="secao" id="secNovo">
       <div class="painel">
-        <h2 id="tituloForm">Novo pagamento</h2>
+        <h2 id="tituloForm">💰 Novo pagamento</h2>
         <form id="formPagamento">
           <input type="hidden" id="pagamentoId" />
           <div class="grid">
@@ -135,6 +137,14 @@
             <label>Total a receber<input id="totalAReceber" type="text" inputmode="decimal" placeholder="Calculado automaticamente" /></label>
           </div>
           <label>Observação<input id="observacao" type="text" placeholder="Opcional" /></label>
+          <label>Comprovante de pagamento (foto ou PDF)
+            <input id="comprovante" type="file" accept="image/*,application/pdf" />
+          </label>
+          <div id="comprovanteAtual" class="comprovante-atual hidden">
+            <span>📎 Comprovante anexado —</span>
+            <button class="btn-link" id="btnVerComprovante" type="button">Ver</button>
+            <label class="label-inline-check"><input id="removerComprovante" type="checkbox" /> Remover</label>
+          </div>
           <div class="acoes">
             <button class="btn principal" type="submit">Salvar</button>
             <button class="btn secundario" id="btnCancelar" type="button">Cancelar</button>
@@ -146,7 +156,7 @@
     <!-- ── Seção 3: Lista de pagamentos ──────────────────────────────── -->
     <section class="secao" id="secLista">
       <div class="sec-cabecalho">
-        <h2 class="sec-titulo">Lista de pagamentos</h2>
+        <h2 class="sec-titulo">💳 Lista de pagamentos</h2>
         <button id="btnExtratoCompleto" class="btn secundario" type="button">📄 Extrato PDF</button>
       </div>
       <div class="painel">

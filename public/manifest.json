@@ -4,8 +4,8 @@
   "description": "Sistema de controle de pagamentos e empréstimos",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f0f4f3",
-  "theme_color": "#0f5132",
+  "background_color": "#f4f7fc",
+  "theme_color": "#1e3a8a",
   "orientation": "portrait-primary",
   "icons": [
     {

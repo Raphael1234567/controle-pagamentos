@@ -8,8 +8,29 @@ const bcrypt       = require('bcryptjs');
 const jwt          = require('jsonwebtoken');
 const nodemailer   = require('nodemailer');
 const PDFDocument  = require('pdfkit');
+const { PDFDocument: PDFLibDocument } = require('pdf-lib');
+const multer       = require('multer');
 
 const app = express();
+
+// ─── Upload de comprovante (foto ou PDF) ───────────────────────────────────────
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (/^image\//.test(file.mimetype) || file.mimetype === 'application/pdf') cb(null, true);
+    else cb(new Error('Apenas imagens ou PDF são permitidos'));
+  }
+});
+
+function uploadComprovante(req, res, next) {
+  upload.single('comprovante')(req, res, err => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ erro: 'Arquivo muito grande (máx. 8MB)' });
+    res.status(400).json({ erro: err.message || 'Erro no upload do arquivo' });
+  });
+}
 
 const corsOrigin = process.env.CORS_ORIGIN;
 app.use(cors(corsOrigin ? { origin: corsOrigin } : {}));
@@ -71,6 +92,7 @@ const limiteAuth = rateLimiter(10, 15 * 60 * 1000);
 // ─── Cálculos financeiros ──────────────────────────────────────────────────────
 
 function formatarData(d) { return d.toISOString().split('T')[0]; }
+function mesAtualISO() { return new Date().toISOString().slice(0, 7); }
 
 function calcularDataVencimento(dataPegou) {
   const d = new Date(`${dataPegou}T00:00:00`);
@@ -208,6 +230,25 @@ app.post('/api/auth/login', limiteAuth, async (req, res) => {
 });
 
 app.get('/api/me', autenticar, (req, res) => res.json({ usuario: req.usuario }));
+
+// ─── Rotas: lucro do mês ───────────────────────────────────────────────────────
+// Lucro = juros dos pagamentos recebidos no mês. Considera também registros já
+// arquivados (cancelado_em), pois o lucro já foi obtido no mês mesmo que o
+// registro tenha sido excluído do sistema depois.
+
+app.get('/api/lucro-mes', autenticar, async (req, res) => {
+  try {
+    const mes = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : mesAtualISO();
+    const { rows } = await pool.query(`
+      SELECT COALESCE(SUM(juros), 0) AS lucro, COUNT(*)::int AS registros
+      FROM public.pagamentos
+      WHERE usuario_id = $1
+        AND data_pago >= $2::date
+        AND data_pago <  ($2::date + INTERVAL '1 month')
+    `, [req.usuario.id, `${mes}-01`]);
+    res.json({ mes, lucro: Number(rows[0].lucro).toFixed(2), registros: rows[0].registros });
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao calcular lucro do mês' }); }
+});
 
 // ─── Rotas: resumo ────────────────────────────────────────────────────────────
 
@@ -375,7 +416,8 @@ app.get('/api/pagamentos', autenticar, async (req, res) => {
              TO_CHAR(data_vencimento,'YYYY-MM-DD')  AS data_vencimento,
              valor, juros, valor+juros              AS valor_total,
              TO_CHAR(data_pago,     'YYYY-MM-DD')   AS data_pago,
-             observacao, criado_em
+             observacao, criado_em,
+             (comprovante_dados IS NOT NULL)        AS tem_comprovante
       FROM public.pagamentos
       WHERE ${where.join(' AND ')}
       ORDER BY ${coluna} ${direcao}, id DESC
@@ -406,7 +448,7 @@ app.get('/api/pagamentos', autenticar, async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar pagamentos' }); }
 });
 
-app.post('/api/pagamentos', autenticar, async (req, res) => {
+app.post('/api/pagamentos', autenticar, uploadComprovante, async (req, res) => {
   try {
     const { nome, dataPagamento, dataVencimento, valor, observacao, totalAReceber } = req.body;
     if (!nome || !dataPagamento || valor == null || valor === '')
@@ -420,18 +462,21 @@ app.post('/api/pagamentos', autenticar, async (req, res) => {
     } else {
       juros = calcularJuros(valorNum, dataPagamento, venc);
     }
+    const comprovanteNome  = req.file ? req.file.originalname : null;
+    const comprovanteTipo  = req.file ? req.file.mimetype     : null;
+    const comprovanteDados = req.file ? req.file.buffer       : null;
     await pool.query(
-      'INSERT INTO public.pagamentos (usuario_id,nome,data_pagamento,data_vencimento,valor,juros,observacao) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [req.usuario.id, nome.trim().toUpperCase(), dataPagamento, venc, valorNum, juros, observacao || null]
+      'INSERT INTO public.pagamentos (usuario_id,nome,data_pagamento,data_vencimento,valor,juros,observacao,comprovante_nome,comprovante_tipo,comprovante_dados) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+      [req.usuario.id, nome.trim().toUpperCase(), dataPagamento, venc, valorNum, juros, observacao || null, comprovanteNome, comprovanteTipo, comprovanteDados]
     );
     res.json({ sucesso: true, mensagem: 'Pagamento salvo com sucesso' });
-    enviarExtratoAutomatico(req.usuario.id, req.usuario.nome).catch(() => {});
+    enviarExtratoAutomatico(req.usuario.id, req.usuario.nome).catch(err => console.error('[extrato] Promise rejeitada:', err));
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao salvar pagamento' }); }
 });
 
-app.put('/api/pagamentos/:id', autenticar, async (req, res) => {
+app.put('/api/pagamentos/:id', autenticar, uploadComprovante, async (req, res) => {
   try {
-    const { nome, dataPagamento, dataVencimento, valor, observacao, totalAReceber } = req.body;
+    const { nome, dataPagamento, dataVencimento, valor, observacao, totalAReceber, removerComprovante } = req.body;
     const id       = Number(req.params.id);
     const valorNum = toNum(valor);
     if (Number.isNaN(valorNum) || valorNum < 0) return res.status(400).json({ erro: 'Valor inválido' });
@@ -444,13 +489,24 @@ app.put('/api/pagamentos/:id', autenticar, async (req, res) => {
       juros = calcularJuros(valorNum, dataPagamento, venc);
     }
 
+    const params = [nome.trim().toUpperCase(), dataPagamento, venc, valorNum, juros, observacao || null];
+    let comprovanteSql = '';
+    if (req.file) {
+      params.push(req.file.originalname, req.file.mimetype, req.file.buffer);
+      comprovanteSql = `, comprovante_nome=$${params.length - 2}, comprovante_tipo=$${params.length - 1}, comprovante_dados=$${params.length}`;
+    } else if (removerComprovante === '1' || removerComprovante === 'true') {
+      comprovanteSql = `, comprovante_nome=NULL, comprovante_tipo=NULL, comprovante_dados=NULL`;
+    }
+    params.push(id, req.usuario.id);
+
     await pool.query(`
       UPDATE public.pagamentos
-      SET nome=$1,data_pagamento=$2,data_vencimento=$3,valor=$4,juros=$5,observacao=$6,atualizado_em=NOW()
-      WHERE id=$7 AND usuario_id=$8 AND data_pago IS NULL AND cancelado_em IS NULL
-    `, [nome.trim().toUpperCase(), dataPagamento, venc, valorNum, juros, observacao || null, id, req.usuario.id]);
+      SET nome=$1,data_pagamento=$2,data_vencimento=$3,valor=$4,juros=$5,observacao=$6,atualizado_em=NOW()${comprovanteSql}
+      WHERE id=$${params.length - 1} AND usuario_id=$${params.length} AND data_pago IS NULL AND cancelado_em IS NULL
+    `, params);
 
     res.json({ sucesso: true, mensagem: 'Pagamento atualizado com sucesso' });
+    enviarExtratoAutomatico(req.usuario.id, req.usuario.nome).catch(err => console.error('[extrato] Promise rejeitada:', err));
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao atualizar pagamento' }); }
 });
 
@@ -477,6 +533,21 @@ app.delete('/api/pagamentos/:id', autenticar, async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao arquivar registro' }); }
 });
 
+app.get('/api/pagamentos/:id/comprovante', autenticar, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { rows } = await pool.query(
+      'SELECT comprovante_nome, comprovante_tipo, comprovante_dados FROM public.pagamentos WHERE id=$1 AND usuario_id=$2',
+      [id, req.usuario.id]
+    );
+    const row = rows[0];
+    if (!row || !row.comprovante_dados) return res.status(404).json({ erro: 'Comprovante não encontrado' });
+    res.setHeader('Content-Type', row.comprovante_tipo || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(row.comprovante_nome || 'comprovante')}"`);
+    res.send(row.comprovante_dados);
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar comprovante' }); }
+});
+
 // ─── Extrato: helpers ─────────────────────────────────────────────────────────
 
 async function fetchExtratoRows(uid, f) {
@@ -494,7 +565,7 @@ async function fetchExtratoRows(uid, f) {
            TO_CHAR(data_vencimento,'YYYY-MM-DD')  AS data_vencimento,
            valor, juros, valor+juros              AS valor_total,
            TO_CHAR(data_pago,     'YYYY-MM-DD')   AS data_pago,
-           observacao
+           observacao, comprovante_nome, comprovante_tipo, comprovante_dados
     FROM public.pagamentos
     WHERE ${where.join(' AND ')}
     ORDER BY data_vencimento ASC, id DESC
@@ -533,8 +604,62 @@ function buildPDF(rows, titulo, subtitulo) {
     doc.on('end',  () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
     fillPDF(doc, rows, titulo, subtitulo);
+    anexarImagensComprovante(doc, rows);
     doc.end();
   });
+}
+
+function anexarImagensComprovante(doc, rows) {
+  const dBR = d => { if (!d) return '-'; const [a, m, di] = d.split('-'); return `${di}/${m}/${a}`; };
+  const comImagem = rows.filter(r => r.comprovante_dados && /^image\//.test(r.comprovante_tipo || ''));
+
+  for (const row of comImagem) {
+    doc.addPage({ size: 'A4', layout: 'portrait', margin: 40 });
+    doc.fillColor('#0f5132').font('Helvetica-Bold').fontSize(14)
+       .text(`Comprovante - ${row.nome}`, { align: 'left' });
+    doc.fillColor('#667085').font('Helvetica').fontSize(9)
+       .text(`Pego em ${dBR(row.data_pagamento)}  ·  Vencimento ${dBR(row.data_vencimento)}${row.data_pago ? `  ·  Pago em ${dBR(row.data_pago)}` : ''}`);
+    doc.moveDown(1);
+    const top = doc.y;
+    try {
+      doc.image(row.comprovante_dados, doc.page.margins.left, top, {
+        fit: [doc.page.width - doc.page.margins.left - doc.page.margins.right, doc.page.height - top - doc.page.margins.bottom],
+        align: 'center'
+      });
+    } catch (err) {
+      doc.fillColor('#b42318').font('Helvetica').fontSize(10)
+         .text('Não foi possível exibir a imagem deste comprovante.');
+    }
+  }
+}
+
+// Comprovantes em PDF não podem ser desenhados pelo pdfkit (documento já finalizado),
+// então são anexados como páginas extras via merge com pdf-lib.
+async function anexarComprovantesPDF(buf, rows) {
+  const comPDF = rows.filter(r => r.comprovante_dados && r.comprovante_tipo === 'application/pdf');
+  if (!comPDF.length) return buf;
+
+  try {
+    const destino = await PDFLibDocument.load(buf);
+    for (const row of comPDF) {
+      try {
+        const origem = await PDFLibDocument.load(row.comprovante_dados);
+        const paginas = await destino.copyPages(origem, origem.getPageIndices());
+        paginas.forEach(p => destino.addPage(p));
+      } catch (err) {
+        console.error('[extrato] Erro ao anexar comprovante PDF de', row.nome, ':', err.message);
+      }
+    }
+    return Buffer.from(await destino.save());
+  } catch (err) {
+    console.error('[extrato] Erro ao mesclar comprovantes PDF:', err.message);
+    return buf;
+  }
+}
+
+async function buildExtratoPDF(rows, titulo, subtitulo) {
+  const buf = await buildPDF(rows, titulo, subtitulo);
+  return anexarComprovantesPDF(buf, rows);
 }
 
 function fillPDF(doc, rows, titulo, subtitulo) {
@@ -644,13 +769,19 @@ async function enviarEmailComPDF(para, assunto, texto, filename, buf) {
 }
 
 async function enviarExtratoAutomatico(uid, nomeUsuario) {
-  if (!process.env.EMAIL_DESTINO || !process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) return;
+  if (!process.env.EMAIL_DESTINO || !process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.log('[extrato] Abortado: variáveis SMTP/EMAIL_DESTINO não configuradas');
+    return;
+  }
   try {
+    console.log(`[extrato] Buscando registros para uid=${uid}...`);
     const rows = await fetchExtratoRows(uid, {});
-    if (!rows.length) return;
+    if (!rows.length) { console.log('[extrato] Nenhum registro encontrado, email não enviado'); return; }
+    console.log(`[extrato] ${rows.length} registro(s) encontrado(s), gerando PDF...`);
     const titulo    = 'Extrato Completo de Pagamentos';
     const subtitulo = `Usuário: ${nomeUsuario}  |  ${rows.length} registro(s)  |  ${new Date().toLocaleDateString('pt-BR')}`;
-    const buf = await buildPDF(rows, titulo, subtitulo);
+    const buf = await buildExtratoPDF(rows, titulo, subtitulo);
+    console.log(`[extrato] PDF gerado (${buf.length} bytes), enviando para ${process.env.EMAIL_DESTINO}...`);
     await enviarEmailComPDF(
       process.env.EMAIL_DESTINO,
       `Extrato atualizado — ${new Date().toLocaleDateString('pt-BR')}`,
@@ -658,7 +789,8 @@ async function enviarExtratoAutomatico(uid, nomeUsuario) {
       'extrato-completo.pdf',
       buf
     );
-  } catch (err) { console.error('Erro ao enviar extrato automático:', err); }
+    console.log('[extrato] Email enviado com sucesso');
+  } catch (err) { console.error('[extrato] ERRO:', err.message, err.stack); }
 }
 
 // ─── Rotas: extratos PDF ──────────────────────────────────────────────────────
@@ -671,7 +803,7 @@ app.get('/api/extratos/completo/pdf', autenticar, async (req, res) => {
 
     const titulo    = 'Extrato Completo de Pagamentos';
     const subtitulo = `Usuario: ${req.usuario.nome}  |  ${rows.length} registro(s)  |  ${new Date().toLocaleDateString('pt-BR')}`;
-    const buf = await buildPDF(rows, titulo, subtitulo);
+    const buf = await buildExtratoPDF(rows, titulo, subtitulo);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="extrato-completo.pdf"');
@@ -690,7 +822,7 @@ app.post('/api/extratos/completo/email', autenticar, async (req, res) => {
 
     const titulo    = 'Extrato Completo de Pagamentos';
     const subtitulo = `Usuario: ${req.usuario.nome}  |  ${rows.length} registro(s)  |  ${new Date().toLocaleDateString('pt-BR')}`;
-    const buf = await buildPDF(rows, titulo, subtitulo);
+    const buf = await buildExtratoPDF(rows, titulo, subtitulo);
 
     await enviarEmailComPDF(
       emailDestino, titulo,
@@ -714,7 +846,7 @@ app.get('/api/extratos/pessoa/:nome/pdf', autenticar, async (req, res) => {
 
     const titulo    = `Extrato - ${nome}`;
     const subtitulo = `Usuario: ${req.usuario.nome}  |  ${rows.length} registro(s)  |  ${new Date().toLocaleDateString('pt-BR')}`;
-    const buf = await buildPDF(rows, titulo, subtitulo);
+    const buf = await buildExtratoPDF(rows, titulo, subtitulo);
     const safeName = nome.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -735,7 +867,7 @@ app.post('/api/extratos/pessoa/:nome/email', autenticar, async (req, res) => {
 
     const titulo    = `Extrato - ${nome}`;
     const subtitulo = `Usuario: ${req.usuario.nome}  |  ${rows.length} registro(s)  |  ${new Date().toLocaleDateString('pt-BR')}`;
-    const buf = await buildPDF(rows, titulo, subtitulo);
+    const buf = await buildExtratoPDF(rows, titulo, subtitulo);
     const safeName = nome.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
     await enviarEmailComPDF(

@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS public.pagamentos (
     data_pago DATE,
     cancelado_em TIMESTAMPTZ,
     atualizado_em TIMESTAMPTZ DEFAULT NOW(),
-    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    comprovante_nome TEXT,
+    comprovante_tipo TEXT,
+    comprovante_dados BYTEA
 );
 
 -- Colunas adicionadas em versões anteriores (seguro rodar mesmo se já existirem)
@@ -32,6 +35,11 @@ ALTER TABLE public.pagamentos ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ
 -- Colunas de controle de e-mail
 ALTER TABLE public.pagamentos ADD COLUMN IF NOT EXISTS email_vencimento_enviado BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE public.pagamentos ADD COLUMN IF NOT EXISTS email_proximo_enviado BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Comprovante de pagamento (foto ou PDF), guardado direto no banco
+ALTER TABLE public.pagamentos ADD COLUMN IF NOT EXISTS comprovante_nome TEXT;
+ALTER TABLE public.pagamentos ADD COLUMN IF NOT EXISTS comprovante_tipo TEXT;
+ALTER TABLE public.pagamentos ADD COLUMN IF NOT EXISTS comprovante_dados BYTEA;
 
 UPDATE public.pagamentos
 SET data_vencimento = (data_pagamento + INTERVAL '1 month')::date
