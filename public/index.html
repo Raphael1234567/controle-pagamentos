@@ -175,6 +175,12 @@
           <button id="btnLimparFiltros" class="btn-filtro limpar">✕ Limpar</button>
         </div>
 
+        <!-- Seleção rápida por nome -->
+        <div class="filtro-nomes-wrap">
+          <span class="filtro-nomes-titulo">Selecionar por nome</span>
+          <div id="listaNomesCheckbox" class="filtro-nomes-lista"></div>
+        </div>
+
         <!-- Busca + status -->
         <div class="barra-filtros">
           <input id="busca" type="text" placeholder="🔍 Buscar por nome..." />
@@ -232,7 +238,7 @@
           <input type="hidden" id="clienteId" />
           <div class="grid grid-cliente">
             <label>Nome<input id="clienteNome" type="text" placeholder="Ex: JOÃO" required autocomplete="off" /></label>
-            <label>Limite de crédito<input id="clienteLimite" type="text" inputmode="decimal" placeholder="Opcional" /></label>
+            <label>Limite de crédito<input id="clienteLimite" type="text" inputmode="decimal" placeholder="Em branco = sugerido pelo histórico" /></label>
           </div>
           <label>Observação<input id="clienteObservacao" type="text" placeholder="Opcional" /></label>
           <label>Foto do cliente<input id="clienteFoto" type="file" accept="image/*" /></label>

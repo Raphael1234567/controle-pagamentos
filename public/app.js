@@ -27,6 +27,7 @@ const observacao     = $('observacao');
 const tbody          = $('tbodyPagamentos');
 const busca          = $('busca');
 const filtroStatus   = $('filtroStatus');
+const listaNomesCheckbox = $('listaNomesCheckbox');
 const mesResumo         = $('mesResumo');
 const selectClienteDash = $('filtroClienteDash');
 const btnCancelar         = $('btnCancelar');
@@ -295,6 +296,36 @@ async function carregarNomes() {
     selectClienteDash.appendChild(opt);
   });
   selectClienteDash.value = nomes.includes(atual) ? atual : '';
+
+  renderizarListaNomesCheckbox(nomes);
+}
+
+function renderizarListaNomesCheckbox(nomes) {
+  const selecionado = busca.value.trim();
+  listaNomesCheckbox.innerHTML = '';
+  if (!nomes.length) {
+    listaNomesCheckbox.innerHTML = '<span class="texto-suave">Nenhum nome com empréstimo ainda</span>';
+    return;
+  }
+  nomes.forEach(n => {
+    const marcado = n === selecionado;
+    const label = document.createElement('label');
+    label.className = 'chip-nome' + (marcado ? ' marcado' : '');
+    label.innerHTML = `<input type="checkbox" ${marcado ? 'checked' : ''} /> ${n}`;
+    label.querySelector('input').addEventListener('change', e => {
+      const jaMarcado = e.target.checked;
+      listaNomesCheckbox.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        if (cb !== e.target) cb.checked = false;
+      });
+      listaNomesCheckbox.querySelectorAll('.chip-nome').forEach(chip => chip.classList.remove('marcado'));
+      if (jaMarcado) label.classList.add('marcado');
+      busca.value    = jaMarcado ? n : '';
+      filtroRapido   = null;
+      ativarBtnFiltro(null);
+      carregarListaEResumo();
+    });
+    listaNomesCheckbox.appendChild(label);
+  });
 }
 
 async function carregarResumo() {
@@ -520,6 +551,8 @@ function limparTodosFiltros() {
   filtroStatus.value    = 'TODOS';
   inputDataInicio.value = '';
   inputDataFim.value    = '';
+  listaNomesCheckbox.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+  listaNomesCheckbox.querySelectorAll('.chip-nome').forEach(chip => chip.classList.remove('marcado'));
   ativarBtnFiltro(null);
   carregarListaEResumo();
 }
@@ -765,10 +798,15 @@ function renderizarClientes() {
     return;
   }
   clientes.forEach(c => {
+    const nomeAttr = c.nome.replace(/"/g, '&quot;');
     const foto = c.tem_foto
       ? `<img class="cliente-foto" src="${API_BASE}/clientes/${c.id}/foto" alt="${c.nome}" />`
       : `<div class="cliente-foto-placeholder">👤</div>`;
-    const limiteExcedido = c.limite_credito != null && Number(c.total_em_aberto) > c.limite_credito;
+    const limiteExcedido = Number(c.total_em_aberto) > c.limite_efetivo;
+    const limiteTexto = `${moeda(c.limite_efetivo)}${c.limite_credito == null ? ' <small>(sugerido)</small>' : ''}`;
+    const removerBtn = c.id != null
+      ? `<button class="btn perigo" type="button" data-nome="${nomeAttr}" onclick="window.removerCliente(${c.id})">🗑️</button>`
+      : '';
     const card = document.createElement('div');
     card.className = 'cliente-card';
     card.innerHTML = `
@@ -780,15 +818,16 @@ function renderizarClientes() {
         </div>
       </div>
       <div class="cliente-card-stats">
-        <div><span>Limite</span><strong>${c.limite_credito != null ? moeda(c.limite_credito) : '—'}</strong></div>
+        <div><span>Limite</span><strong>${limiteTexto}</strong></div>
         <div><span>Em aberto</span><strong>${moeda(c.total_em_aberto)}</strong></div>
         <div><span>Empréstimos</span><strong>${c.total_emprestimos}</strong></div>
       </div>
       ${limiteExcedido ? '<div class="cliente-card-alerta">⚠️ Limite de crédito excedido</div>' : ''}
+      ${c.id == null ? '<div class="cliente-card-alerta cliente-card-info">ℹ️ Ainda não cadastrado — cadastre para adicionar foto</div>' : ''}
       <div class="cliente-card-acoes">
-        <button class="btn secundario" type="button" onclick="window.verHistoricoCliente(${c.id})">📜 Histórico</button>
-        <button class="btn secundario" type="button" onclick="window.editarCliente(${c.id})">✏️</button>
-        <button class="btn perigo" type="button" onclick="window.removerCliente(${c.id})">🗑️</button>
+        <button class="btn secundario" type="button" data-nome="${nomeAttr}" onclick="window.verHistoricoCliente(this.dataset.nome)">📜 Histórico</button>
+        <button class="btn secundario" type="button" data-nome="${nomeAttr}" onclick="window.editarClientePorNome(this.dataset.nome)">✏️</button>
+        ${removerBtn}
       </div>
     `;
     listaClientes.appendChild(card);
@@ -835,10 +874,10 @@ formCliente.addEventListener('submit', async e => {
   toast(data.mensagem || 'Cliente salvo com sucesso');
 });
 
-window.editarCliente = function (id) {
-  const c = clientes.find(x => Number(x.id) === Number(id));
+window.editarClientePorNome = function (nomePessoa) {
+  const c = clientes.find(x => x.nome === nomePessoa);
   if (!c) { toast('Cliente não encontrado'); return; }
-  clienteId.value         = c.id;
+  clienteId.value         = c.id != null ? c.id : '';
   clienteNome.value       = c.nome;
   clienteLimite.value     = c.limite_credito != null ? String(Number(c.limite_credito).toFixed(2)).replace('.', ',') : '';
   clienteObservacao.value = c.observacao || '';
@@ -867,20 +906,14 @@ btnVerFotoCliente.addEventListener('click', async () => {
   window.open(URL.createObjectURL(blob), '_blank');
 });
 
-window.verHistoricoCliente = async function (id) {
-  const res = await fetch(`${API_BASE}/clientes/${id}/historico`, { headers: headers() });
+window.verHistoricoCliente = async function (nomePessoa) {
+  const res = await fetch(`${API_BASE}/clientes/por-nome/${encodeURIComponent(nomePessoa)}/historico`, { headers: headers() });
   if (!res.ok) { toast('Erro ao buscar histórico'); return; }
   const { cliente, stats, historico } = await res.json();
   abrirModalHistorico(cliente, stats, historico);
 };
 
-window.verHistoricoPorNome = function (nomePessoa) {
-  const c = clientes.find(x => x.nome === nomePessoa);
-  if (c) { window.verHistoricoCliente(c.id); return; }
-  busca.value = nomePessoa;
-  carregarPagamentos();
-  toast('Cliente ainda não cadastrado — filtrando a lista por esse nome. Cadastre-o na aba Clientes para ver o histórico completo.');
-};
+window.verHistoricoPorNome = window.verHistoricoCliente;
 
 function abrirModalHistorico(cliente, stats, historico) {
   histNome.textContent = cliente.nome;
@@ -896,9 +929,10 @@ function abrirModalHistorico(cliente, stats, historico) {
     histFotoPlaceholder.classList.remove('hidden');
   }
 
-  const limiteExcedido = cliente.limite_credito != null && Number(stats.total_em_aberto) > cliente.limite_credito;
+  const limiteExcedido = Number(stats.total_em_aberto) > cliente.limite_efetivo;
+  const limiteTexto = `${moeda(cliente.limite_efetivo)}${cliente.limite_credito == null ? ' <small>(sugerido)</small>' : ''}`;
   histStats.innerHTML = `
-    <div class="stat-mini"><span>Limite</span><strong>${cliente.limite_credito != null ? moeda(cliente.limite_credito) : '—'}</strong></div>
+    <div class="stat-mini"><span>Limite</span><strong>${limiteTexto}</strong></div>
     <div class="stat-mini ${limiteExcedido ? 'alerta' : ''}"><span>Em aberto</span><strong>${moeda(stats.total_em_aberto)}</strong></div>
     <div class="stat-mini"><span>Total pago</span><strong>${moeda(stats.total_pago)}</strong></div>
     <div class="stat-mini"><span>Já pegou</span><strong>${moeda(stats.total_emprestado)}</strong></div>
@@ -956,6 +990,12 @@ selectClienteDash.addEventListener('change', () => {
 
 busca.addEventListener('input', () => {
   filtroRapido = null; ativarBtnFiltro(null);
+  listaNomesCheckbox.querySelectorAll('.chip-nome').forEach(chip => {
+    const cb = chip.querySelector('input');
+    const marcado = chip.textContent.trim() === busca.value.trim();
+    cb.checked = marcado;
+    chip.classList.toggle('marcado', marcado);
+  });
   carregarListaEResumo();
 });
 filtroStatus.addEventListener('change', () => {

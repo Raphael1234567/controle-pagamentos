@@ -210,6 +210,23 @@ function calcularStatsCliente(nome, pagamentos) {
   };
 }
 
+// Limite de crédito sugerido a partir do histórico: recompensa quem paga em
+// dia com um limite maior que o próprio histórico de valores pegos, e reduz
+// (ou zera) para quem está com atraso ou é mau pagador.
+function calcularLimiteSugerido(stats) {
+  const mediaEmprestimo = stats.total_emprestimos > 0
+    ? Number(stats.total_emprestado) / stats.total_emprestimos
+    : 0;
+  switch (stats.classificacao) {
+    case 'BOM_PAGADOR':   return Number(Math.max(300, mediaEmprestimo * 2).toFixed(2));
+    case 'REGULAR':       return Number(Math.max(150, mediaEmprestimo).toFixed(2));
+    case 'MAU_PAGADOR':
+    case 'INADIMPLENTE':  return 0;
+    case 'SEM_HISTORICO':
+    default:              return 200;
+  }
+}
+
 // ─── Verificação de vencimentos por e-mail ────────────────────────────────────
 
 async function verificarVencimentos() {
@@ -456,15 +473,18 @@ app.get('/api/nomes', autenticar, async (req, res) => {
 
 // ─── Rotas: clientes ────────────────────────────────────────────────────────────
 
+// Toda pessoa com pelo menos um empréstimo já é "cliente" no sistema, mesmo que
+// ninguém tenha preenchido o cadastro (foto/limite) dela ainda — por isso a
+// lista mescla os registros da tabela clientes com os nomes que só existem em
+// pagamentos, criando uma entrada "virtual" (id: null) para estes últimos.
 app.get('/api/clientes', autenticar, async (req, res) => {
   try {
-    const { rows: clientes } = await pool.query(`
+    const { rows: registrados } = await pool.query(`
       SELECT id, nome, limite_credito, observacao,
              TO_CHAR(criado_em,'YYYY-MM-DD') AS criado_em,
              (foto_dados IS NOT NULL) AS tem_foto
       FROM public.clientes
       WHERE usuario_id=$1 AND cancelado_em IS NULL
-      ORDER BY nome
     `, [req.usuario.id]);
 
     const { rows: pagamentos } = await pool.query(`
@@ -476,14 +496,65 @@ app.get('/api/clientes', autenticar, async (req, res) => {
       WHERE usuario_id=$1
     `, [req.usuario.id]);
 
-    const lista = clientes.map(c => ({
-      ...c,
-      limite_credito: c.limite_credito != null ? Number(c.limite_credito) : null,
-      ...calcularStatsCliente(c.nome, pagamentos)
-    }));
+    const porNome = new Map(registrados.map(c => [c.nome, c]));
+    for (const nome of new Set(pagamentos.map(p => p.nome))) {
+      if (!porNome.has(nome)) {
+        porNome.set(nome, { id: null, nome, limite_credito: null, observacao: null, criado_em: null, tem_foto: false });
+      }
+    }
+
+    const lista = [...porNome.values()].map(c => {
+      const stats          = calcularStatsCliente(c.nome, pagamentos);
+      const limiteCredito  = c.limite_credito != null ? Number(c.limite_credito) : null;
+      const limiteSugerido = calcularLimiteSugerido(stats);
+      return {
+        ...c,
+        limite_credito:  limiteCredito,
+        limite_sugerido: limiteSugerido,
+        limite_efetivo:  limiteCredito != null ? limiteCredito : limiteSugerido,
+        ...stats
+      };
+    }).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
     res.json(lista);
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar clientes' }); }
 });
+
+async function montarHistoricoCliente(usuarioId, cliente) {
+  const { rows } = await pool.query(`
+    SELECT id, TO_CHAR(data_pagamento,'YYYY-MM-DD')  AS data_pagamento,
+           TO_CHAR(data_vencimento,'YYYY-MM-DD')      AS data_vencimento,
+           valor, juros,
+           TO_CHAR(data_pago,'YYYY-MM-DD')            AS data_pago,
+           observacao, cancelado_em, (comprovante_dados IS NOT NULL) AS tem_comprovante
+    FROM public.pagamentos
+    WHERE usuario_id=$1 AND nome=$2
+    ORDER BY data_pagamento DESC, id DESC
+  `, [usuarioId, cliente.nome]);
+
+  const historico = rows.map(p => {
+    const arquivado = !!p.cancelado_em;
+    const juros = jurosAtualizado(p.valor, p.juros, p.data_vencimento, p.data_pago);
+    return {
+      id: p.id,
+      data_pagamento: p.data_pagamento,
+      data_vencimento: p.data_vencimento,
+      valor: Number(p.valor),
+      juros,
+      valor_total: Number(p.valor) + juros,
+      data_pago: p.data_pago,
+      observacao: p.observacao,
+      arquivado,
+      tem_comprovante: p.tem_comprovante,
+      status_pagamento: p.data_pago ? 'PAGO' : (arquivado ? 'ARQUIVADO' : statusAutomatico(p.data_vencimento, p.data_pago))
+    };
+  });
+
+  const stats          = calcularStatsCliente(cliente.nome, rows.map(p => ({ ...p, nome: cliente.nome })));
+  const limiteSugerido = calcularLimiteSugerido(stats);
+  const limiteCliente  = { ...cliente, limite_sugerido: limiteSugerido, limite_efetivo: cliente.limite_credito != null ? cliente.limite_credito : limiteSugerido };
+  return { cliente: limiteCliente, stats, historico };
+}
 
 app.get('/api/clientes/:id/historico', autenticar, async (req, res) => {
   try {
@@ -496,38 +567,32 @@ app.get('/api/clientes/:id/historico', autenticar, async (req, res) => {
     const cliente = clienteRows[0];
     if (!cliente) return res.status(404).json({ erro: 'Cliente não encontrado' });
     cliente.limite_credito = cliente.limite_credito != null ? Number(cliente.limite_credito) : null;
+    res.json(await montarHistoricoCliente(req.usuario.id, cliente));
+  } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar histórico do cliente' }); }
+});
 
-    const { rows } = await pool.query(`
-      SELECT id, TO_CHAR(data_pagamento,'YYYY-MM-DD')  AS data_pagamento,
-             TO_CHAR(data_vencimento,'YYYY-MM-DD')      AS data_vencimento,
-             valor, juros,
-             TO_CHAR(data_pago,'YYYY-MM-DD')            AS data_pago,
-             observacao, cancelado_em, (comprovante_dados IS NOT NULL) AS tem_comprovante
-      FROM public.pagamentos
-      WHERE usuario_id=$1 AND nome=$2
-      ORDER BY data_pagamento DESC, id DESC
-    `, [req.usuario.id, cliente.nome]);
-
-    const historico = rows.map(p => {
-      const arquivado = !!p.cancelado_em;
-      const juros = jurosAtualizado(p.valor, p.juros, p.data_vencimento, p.data_pago);
-      return {
-        id: p.id,
-        data_pagamento: p.data_pagamento,
-        data_vencimento: p.data_vencimento,
-        valor: Number(p.valor),
-        juros,
-        valor_total: Number(p.valor) + juros,
-        data_pago: p.data_pago,
-        observacao: p.observacao,
-        arquivado,
-        tem_comprovante: p.tem_comprovante,
-        status_pagamento: p.data_pago ? 'PAGO' : (arquivado ? 'ARQUIVADO' : statusAutomatico(p.data_vencimento, p.data_pago))
-      };
-    });
-
-    const stats = calcularStatsCliente(cliente.nome, rows.map(p => ({ ...p, nome: cliente.nome })));
-    res.json({ cliente, stats, historico });
+// Histórico por nome: cobre também quem tem empréstimo mas nunca foi
+// formalmente cadastrado na tela de Clientes (cliente "virtual", id: null).
+app.get('/api/clientes/por-nome/:nome/historico', autenticar, async (req, res) => {
+  try {
+    const nome = req.params.nome.trim().toUpperCase();
+    const { rows: clienteRows } = await pool.query(
+      `SELECT id, nome, limite_credito, observacao, (foto_dados IS NOT NULL) AS tem_foto
+       FROM public.clientes WHERE usuario_id=$1 AND nome=$2 AND cancelado_em IS NULL`,
+      [req.usuario.id, nome]
+    );
+    let cliente = clienteRows[0];
+    if (cliente) {
+      cliente.limite_credito = cliente.limite_credito != null ? Number(cliente.limite_credito) : null;
+    } else {
+      const { rows: existe } = await pool.query(
+        'SELECT 1 FROM public.pagamentos WHERE usuario_id=$1 AND nome=$2 LIMIT 1',
+        [req.usuario.id, nome]
+      );
+      if (!existe.length) return res.status(404).json({ erro: 'Cliente não encontrado' });
+      cliente = { id: null, nome, limite_credito: null, observacao: null, tem_foto: false };
+    }
+    res.json(await montarHistoricoCliente(req.usuario.id, cliente));
   } catch (e) { console.error(e); res.status(500).json({ erro: 'Erro ao buscar histórico do cliente' }); }
 });
 
