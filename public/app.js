@@ -228,21 +228,24 @@ function configurarModoAuth(cadastro) {
 
 async function autenticar(e) {
   e.preventDefault();
-  const endpoint = modoCadastro ? '/auth/cadastrar' : '/auth/login';
-  const payload  = modoCadastro
-    ? { nome: authNome.value, email: authEmail.value, senha: authSenha.value }
-    : { email: authEmail.value, senha: authSenha.value };
+  mostrarLoading();
+  try {
+    const endpoint = modoCadastro ? '/auth/cadastrar' : '/auth/login';
+    const payload  = modoCadastro
+      ? { nome: authNome.value, email: authEmail.value, senha: authSenha.value }
+      : { email: authEmail.value, senha: authSenha.value };
 
-  const res  = await fetch(`${API_BASE}${endpoint}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-  });
-  const data = await res.json();
-  if (!res.ok) { toast(data.erro || 'Erro ao autenticar'); return; }
+    const res  = await fetch(`${API_BASE}${endpoint}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) { toast(data.erro || 'Erro ao autenticar'); return; }
 
-  localStorage.setItem('token', data.token);
-  localStorage.setItem('usuario', JSON.stringify(data.usuario));
-  formAuth.reset();
-  mostrarApp();
+    localStorage.setItem('token', data.token);
+    localStorage.setItem('usuario', JSON.stringify(data.usuario));
+    formAuth.reset();
+    mostrarApp();
+  } finally { esconderLoading(); }
 }
 
 function sair() {
@@ -539,18 +542,35 @@ async function carregarPagamentos() {
   renderizar();
 }
 
-async function carregarTudo() {
-  await Promise.all([carregarResumo(), carregarPagamentos(), carregarGraficos(), carregarNomes(), carregarLucroMes()]);
+let _loadingCount = 0;
+function mostrarLoading() {
+  _loadingCount++;
+  $('loadingOverlay').classList.remove('hidden');
+}
+function esconderLoading() {
+  _loadingCount = Math.max(0, _loadingCount - 1);
+  if (_loadingCount === 0) $('loadingOverlay').classList.add('hidden');
 }
 
-async function carregarLucroMes() {
-  const banner = $('bannerLucro');
+async function carregarTudo() {
+  mostrarLoading();
   try {
-    const res = await fetch(`${API_BASE}/lucro-mes`, { headers: headers() });
+    await Promise.all([carregarResumo(), carregarPagamentos(), carregarGraficos(), carregarNomes(), carregarLucroMes()]);
+  } finally { esconderLoading(); }
+}
+
+async function carregarLucroMes(mes) {
+  const banner  = $('bannerLucro');
+  const texto   = $('bannerLucroTexto');
+  const seletor = $('bannerLucroMes');
+  const mesAlvo = mes || seletor.value || mesAtual();
+  if (!seletor.value) seletor.value = mesAlvo;
+  try {
+    const res = await fetch(`${API_BASE}/lucro-mes?mes=${mesAlvo}`, { headers: headers() });
     if (!res.ok) { banner.classList.add('hidden'); return; }
     const r = await res.json();
     const lucro = Number(r.lucro || 0);
-    banner.textContent = lucro > 0
+    texto.textContent = lucro > 0
       ? `💰 Você lucrou ${moeda(lucro)} em ${formatarMesLabel(r.mes)} (juros recebidos, mesmo de pagamentos já excluídos do sistema)`
       : `📅 Nenhum lucro registrado em ${formatarMesLabel(r.mes)} ainda`;
     banner.classList.toggle('zero', lucro <= 0);
@@ -713,6 +733,7 @@ btnVerComprovante.addEventListener('click', () => {
 });
 btnAtualizar.addEventListener('click', carregarTudo);
 mesResumo.addEventListener('change', () => { carregarResumo(); carregarGraficos(); });
+$('bannerLucroMes').addEventListener('change', e => carregarLucroMes(e.target.value));
 selectClienteDash.addEventListener('change', () => {
   filtroClienteDash = selectClienteDash.value;
   carregarResumo();

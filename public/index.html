@@ -54,7 +54,12 @@
       </div>
     </header>
 
-    <div id="bannerLucro" class="banner-lucro hidden"></div>
+    <div id="bannerLucro" class="banner-lucro hidden">
+      <span id="bannerLucroTexto"></span>
+      <label class="banner-lucro-filtro">Ver mês
+        <input id="bannerLucroMes" type="month" />
+      </label>
+    </div>
 
     <!-- ── Seção 1: Dashboard ─────────────────────────────────────────── -->
     <section class="secao secao-ativa" id="secInicio">
@@ -296,6 +301,13 @@
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="loading-money">
+      <span>💰</span><span>💵</span><span>💲</span>
+    </div>
+    <p>Carregando...</p>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="app.js"></script>

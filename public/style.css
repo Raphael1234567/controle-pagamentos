@@ -125,9 +125,33 @@ body {
   color: #14532d;
   font-weight: 700;
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
   text-align: center;
 }
 .banner-lucro.zero { background: var(--azul-claro); border-color: #bfdbfe; color: var(--azul-escuro); }
+
+.banner-lucro-filtro {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 12px;
+  color: inherit;
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+.banner-lucro-filtro input {
+  width: auto;
+  margin-top: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--branco);
+  color: #1d2939;
+}
 
 @media (max-width: 860px) {
   .banner-lucro { margin: 12px 14px 0; width: auto; }
@@ -629,6 +653,45 @@ tbody tr:hover           { background: var(--azul-claro); }
   color: var(--cinza);
   font-size: 14px;
   font-weight: 600;
+}
+
+/* ── Overlay de carregamento (dinheiro) ─────────────────────────────────── */
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .55);
+  backdrop-filter: blur(1px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  z-index: 300;
+}
+
+.loading-money {
+  display: flex;
+  gap: 10px;
+}
+
+.loading-money span {
+  font-size: 36px;
+  animation: money-bounce .9s ease-in-out infinite;
+}
+.loading-money span:nth-child(2) { animation-delay: .15s; }
+.loading-money span:nth-child(3) { animation-delay: .3s; }
+
+@keyframes money-bounce {
+  0%, 100% { transform: translateY(0) scale(1); opacity: .6; }
+  50%      { transform: translateY(-14px) scale(1.15); opacity: 1; }
+}
+
+.loading-overlay p {
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: .3px;
 }
 
 /* ── Responsivo ─────────────────────────────────────────────────────────── */
